@@ -1,15 +1,31 @@
 name: Build Geode Mod
-on: [push, workflow_dispatch]
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     name: Build Android Package
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      # 1. Checkout your code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Run the official Geode compiler
+      - name: Build Mod
+        uses: geode-sdk/build-geode-mod@main
         with:
-          submodules: recursive
-      - uses: geode-sdk/build-geode-mod@main
+          # This tells it to build specifically for Android 32-bit and 64-bit platforms
+          target: Android
+
+      # 3. THE MISSING PIECE: Actually save the file!
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          target: Android64
-          
+          name: geode-android-build
+          path: build/*.geode
