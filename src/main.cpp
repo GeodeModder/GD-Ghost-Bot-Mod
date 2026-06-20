@@ -1,100 +1,120 @@
-/**
- * Include the Geode headers.
- */
 #include <Geode/Geode.hpp>
-/**
- * Brings cocos2d and all Geode namespaces to the current scope.
- */
+#include <Geode/modify/PauseLayer.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+
 using namespace geode::prelude;
 
-/**
- * `$modify` lets you extend and modify GD's classes.
- * To hook a function in Geode, simply $modify the class
- * and write a new function definition with the signature of
- * the function you want to hook.
- *
- * Here we use the overloaded `$modify` macro to set our own class name,
- * so that we can use it for button callbacks.
- *
- * Notice the header being included, you *must* include the header for
- * the class you are modifying, or you will get a compile error.
- *
- * Another way you could do this is like this:
- *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
- */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(MyMenuLayer, MenuLayer) {
-	/**
-	 * Typically classes in GD are initialized using the `init` function, (though not always!),
-	 * so here we use it to add our own button to the bottom menu.
-	 *
-	 * Note that for all hooks, your signature has to *match exactly*,
-	 * `void init()` would not place a hook!
-	*/
-	bool init() {
-		/**
-		 * We call the original init function so that the
-		 * original class is properly initialized.
-		 */
-		if (!MenuLayer::init()) {
-			return false;
-		}
+// Global control variables
+bool g_showGhost = false;
+static PlayerObject* g_ghostPlayer = nullptr; 
 
-		/**
-		 * You can use methods from the `geode::log` namespace to log messages to the console,
-		 * being useful for debugging and such. See this page for more info about logging:
-		 * https://docs.geode-sdk.org/tutorials/logging
-		*/
-	    //log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", static_cast<int>(this->getChildrenCount()));
-	
+// ==========================================
+// 1. THE UI CONTROL (Absolute Position Canvas)
+// ==========================================
+class $modify(MyPauseLayer, PauseLayer) {
+    bool init() {
+        if (!PauseLayer::init()) return false;
 
-		/**
-		 * See this page for more info about buttons
-		 * https://docs.geode-sdk.org/tutorials/buttons
-		*/
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			*/
-			menu_selector(MyMenuLayer::onMyButton)
-		);
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
 
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		*/
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
+        // Screen-wide canvas to avoid layout collapses
+        auto menu = CCMenu::create();
+        menu->setPosition({0.0f, 0.0f});
+        menu->setID("ghost-guide-menu"_spr);
 
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		*/
-		myButton->setID("my-button"_spr);
+        auto label = CCLabelBMFont::create(g_showGhost ? "Ghost: ON" : "Ghost: OFF", "bigFont.fnt");
+        label->setScale(0.5f); 
 
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		*/
-		menu->updateLayout();
+        auto toggleBtn = CCMenuItemSpriteExtra::create(
+            label,
+            this,
+            menu_selector(MyPauseLayer::onToggleGhost)
+        );
+        
+        toggleBtn->setPosition({65.0f, winSize.height - 35.0f});
+        toggleBtn->setID("ghost-guide-toggle"_spr);
 
-		/**
-		 * We return `true` to indicate that the class was properly initialized.
-		 */
-		return true;
-	}
+        menu->addChild(toggleBtn);
+        this->addChild(menu, 1000); 
 
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	*/
-	void onMyButton(CCObject*) {
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
-	}
+        return true;
+    }
+
+    void onToggleGhost(CCObject* sender) {
+        g_showGhost = !g_showGhost;
+        auto btn = static_cast<CCMenuItemSpriteExtra*>(sender);
+        auto label = static_cast<CCLabelBMFont*>(btn->getNormalImage());
+        if (g_showGhost) {
+            label->setString("Ghost: ON");
+            FLAlertLayer::create("Ghost Bot", "Ghost Guide <g>Enabled</g>!", "OK")->show();
+        } else {
+            label->setString("Ghost: OFF");
+            FLAlertLayer::create("Ghost Bot", "Ghost Guide <r>Disabled</r>!", "OK")->show();
+        }
+    }
+};
+
+// ==========================================
+// 2. THE DYNAMIC GHOST LOGIC (Paradox Fixed)
+// ==========================================
+class $modify(MyPlayLayer, PlayLayer) {
+    
+    virtual void onExit() {
+        PlayLayer::onExit();
+        g_ghostPlayer = nullptr; 
+    }
+
+    bool init(GJGameLevel* level, bool useReplay, bool dontRunActions) {
+        if (!PlayLayer::init(level, useReplay, dontRunActions)) return false;
+        g_ghostPlayer = nullptr; 
+        return true;
+    }
+
+    // FIX: Handle spawning inside resetLevel so it works dynamically when toggled mid-game!
+    virtual void resetLevel() {
+        PlayLayer::resetLevel(); 
+        
+        if (g_showGhost) {
+            // If the toggle is ON but the ghost hasn't been created yet, spawn it now!
+            if (!g_ghostPlayer) {
+                g_ghostPlayer = PlayerObject::create(1, 1, this, this, false);
+                if (g_ghostPlayer) {
+                    g_ghostPlayer->setOpacity(128); // Translucent 👻
+                    this->addChild(g_ghostPlayer, 999);
+                }
+            }
+            
+            // Teleport the ghost to your starting position
+            if (g_ghostPlayer) {
+                g_ghostPlayer->setPosition(this->m_player1->getPosition());
+                g_ghostPlayer->setVisible(true);
+            }
+        } else {
+            // If the user turned the ghost OFF, make it invisible
+            if (g_ghostPlayer) {
+                g_ghostPlayer->setVisible(false);
+            }
+        }
+    }
+
+    virtual void update(float dt) {
+        PlayLayer::update(dt); 
+
+        // Only move the ghost if it exists, the toggle is on, and you aren't dead
+        if (g_showGhost && g_ghostPlayer && this->m_player1 && !this->m_player1->m_isDead) {
+            float currentX = this->m_player1->getPositionX();
+            float currentY = this->m_player1->getPositionY();
+            
+            // Keep it 100 pixels ahead of the player horizontally
+            g_ghostPlayer->setPosition({currentX + 100.0f, currentY}); 
+            g_ghostPlayer->setRotation(0); 
+        }
+    }
+
+    virtual void destroyPlayer(PlayerObject* player, GameObject* obstacle) {
+        if (g_showGhost && g_ghostPlayer && player == this->m_player1) {
+            PlayLayer::destroyPlayer(g_ghostPlayer, obstacle);
+        }
+        PlayLayer::destroyPlayer(player, obstacle);
+    }
 };
