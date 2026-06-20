@@ -12,8 +12,8 @@ static PlayerObject* g_ghostPlayer = nullptr;
 // 1. THE UI CONTROL (Absolute Position Canvas)
 // ==========================================
 class $modify(MyPauseLayer, PauseLayer) {
-    bool init() {
-        if (!PauseLayer::init()) return false;
+    bool init(bool unfocused) {
+        if (!PauseLayer::init(unfocused)) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
@@ -55,7 +55,7 @@ class $modify(MyPauseLayer, PauseLayer) {
 };
 
 // ==========================================
-// 2. THE DYNAMIC GHOST LOGIC (Paradox Fixed)
+// 2. THE DYNAMIC GHOST LOGIC
 // ==========================================
 class $modify(MyPlayLayer, PlayLayer) {
     
@@ -70,27 +70,23 @@ class $modify(MyPlayLayer, PlayLayer) {
         return true;
     }
 
-    // FIX: Handle spawning inside resetLevel so it works dynamically when toggled mid-game!
     virtual void resetLevel() {
         PlayLayer::resetLevel(); 
         
         if (g_showGhost) {
-            // If the toggle is ON but the ghost hasn't been created yet, spawn it now!
             if (!g_ghostPlayer) {
                 g_ghostPlayer = PlayerObject::create(1, 1, this, this, false);
                 if (g_ghostPlayer) {
-                    g_ghostPlayer->setOpacity(128); // Translucent 👻
+                    g_ghostPlayer->setOpacity(128); // Translucent ghost 👻
                     this->addChild(g_ghostPlayer, 999);
                 }
             }
             
-            // Teleport the ghost to your starting position
             if (g_ghostPlayer) {
                 g_ghostPlayer->setPosition(this->m_player1->getPosition());
                 g_ghostPlayer->setVisible(true);
             }
         } else {
-            // If the user turned the ghost OFF, make it invisible
             if (g_ghostPlayer) {
                 g_ghostPlayer->setVisible(false);
             }
@@ -100,12 +96,10 @@ class $modify(MyPlayLayer, PlayLayer) {
     virtual void update(float dt) {
         PlayLayer::update(dt); 
 
-        // Only move the ghost if it exists, the toggle is on, and you aren't dead
         if (g_showGhost && g_ghostPlayer && this->m_player1 && !this->m_player1->m_isDead) {
             float currentX = this->m_player1->getPositionX();
             float currentY = this->m_player1->getPositionY();
             
-            // Keep it 100 pixels ahead of the player horizontally
             g_ghostPlayer->setPosition({currentX + 100.0f, currentY}); 
             g_ghostPlayer->setRotation(0); 
         }
