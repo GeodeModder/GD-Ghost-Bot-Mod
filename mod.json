@@ -11,7 +11,12 @@
     "version": "1.0.6",
     "developer": "GeodeModder",
     "description": "A ghost bot mod",
-    "dependencies": {
-        "geode.node-ids": ">=v1.23.3"
-    }
+    "dependencies": [
+        {
+            "id": "geode.node-ids",
+            "version": ">=1.23.3",
+            "importance": "required"
+        }
+    ]
 }
+
