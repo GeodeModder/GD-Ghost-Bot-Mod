@@ -4,17 +4,16 @@
 
 using namespace geode::prelude;
 
-// Simple global boolean tracking if the feature is toggled on or off
-bool g_showGhost = false;
+// FORCE TRUE FOR TESTING: This ensures the ghost attempts to spawn automatically!
+bool g_showGhost = true;
 
 // ==========================================
-// 1. THE UI CONTROL (Android Safe Signature)
+// 1. THE UI CONTROL (Android-Safe Empty Signature)
 // ==========================================
 class $modify(MyPauseLayer, PauseLayer) {
-    bool init(bool unfocused) {
-        if (!PauseLayer::init(unfocused)) return false;
+    bool init() {
+        if (!PauseLayer::init()) return false;
 
-        // Safely fetch standard menus on the Android UI tree
         auto menu = this->getChildByID("left-button-menu");
         if (!menu) menu = this->getChildByID("center-button-menu");
         if (!menu) {
@@ -54,10 +53,9 @@ class $modify(MyPauseLayer, PauseLayer) {
 };
 
 // ==========================================
-// 2. THE MODERN 2.2081 GHOST LOGIC
+// 2. THE PLAYLAYER LOGIC (Auto-Spawning)
 // ==========================================
 class $modify(MyPlayLayer, PlayLayer) {
-    // 4. MEMORY ISOLATION: Declaring custom member variables securely via Geode Fields
     struct Fields {
         PlayerObject* m_ghostBot = nullptr;
     };
@@ -73,42 +71,51 @@ class $modify(MyPlayLayer, PlayLayer) {
         m_fields->m_ghostBot = nullptr; 
     }
 
+    void spawnGhostBot() {
+        if (!m_fields->m_ghostBot) {
+            // Draws directly onto PlayLayer root canvas
+            m_fields->m_ghostBot = PlayerObject::create(1, 2, this, this, true);
+            if (m_fields->m_ghostBot) {
+                m_fields->m_ghostBot->setOpacity(128); 
+                this->addChild(m_fields->m_ghostBot, 999);
+            }
+        }
+    }
+
     void resetLevel() {
         PlayLayer::resetLevel(); 
         
         if (g_showGhost) {
-            if (!m_fields->m_ghostBot && this->m_objectLayer) {
-                // FIX: Swapped 'this' and 'this->m_objectLayer' to match the method signature perfectly!
-                // Also changed the last parameter to 'true' since we are running inside PlayLayer.
-                m_fields->m_ghostBot = PlayerObject::create(1, 2, this, this->m_objectLayer, true);
-                
-                if (m_fields->m_ghostBot) {
-                    m_fields->m_ghostBot->setOpacity(128); // Make our pace car semi-translucent 👻
-                    this->m_objectLayer->addChild(m_fields->m_ghostBot, 999);
-                }
-            }
-            
+            spawnGhostBot();
             if (m_fields->m_ghostBot && this->m_player1) {
                 m_fields->m_ghostBot->setPosition(this->m_player1->getPosition());
                 m_fields->m_ghostBot->setVisible(true);
+            }
+        }
+    }
+
+    void update(float dt) {
+        PlayLayer::update(dt); 
+
+        if (g_showGhost) {
+            if (!m_fields->m_ghostBot) {
+                spawnGhostBot();
+            }
+
+            if (m_fields->m_ghostBot && this->m_player1) {
+                m_fields->m_ghostBot->setVisible(true);
+                
+                float currentX = this->m_player1->getPositionX();
+                float currentY = this->m_player1->getPositionY();
+                
+                // Force it to float slightly ahead of you so you can clearly see it rendering
+                m_fields->m_ghostBot->setPosition({currentX + 60.0f, currentY + 20.0f}); 
+                m_fields->m_ghostBot->setRotation(this->m_player1->getRotation()); 
             }
         } else {
             if (m_fields->m_ghostBot) {
                 m_fields->m_ghostBot->setVisible(false);
             }
-        }
-    }
-    void update(float dt) {
-        PlayLayer::update(dt); 
-
-        // Safely check variables using the modern memory-safe architecture
-        if (g_showGhost && m_fields->m_ghostBot && this->m_player1) {
-            float currentX = this->m_player1->getPositionX();
-            float currentY = this->m_player1->getPositionY();
-            
-            // Positions the pace-car ghost slightly ahead of the real player
-            m_fields->m_ghostBot->setPosition({currentX + 100.0f, currentY}); 
-            m_fields->m_ghostBot->setRotation(this->m_player1->getRotation()); 
         }
     }
 };
