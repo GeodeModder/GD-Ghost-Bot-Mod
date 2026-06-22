@@ -1,17 +1,10 @@
 {
-    "geode": "3.0.0-beta.1",
-    "gd": {
-        "win": "2.2081",
-        "android": "2.2081",
-        "mac": "2.2081",
-        "ios": "2.2081"
-    },
-    "id": "geodemodder.bot_ghost",
-    "name": "Bot Ghost",
-    "version": "1.0.7",
-    "developer": "GeodeModder",
-    "description": "A ghost bot mod",
-    "dependencies": {
-        "geode.node-ids": ">=1.23.3"
-    }
+    "geode": "5.0.0",
+    "id": "joshi1549m.ghost_guide",
+    "version": "1.0.8",
+    "name": "Ghost Guide",
+    "developer": "JOSHI1549M",
+    "description": "A visual pacing guide helper that acts as a holographic pace car for normal runs.",
+    "dependencies": {},
+    "settings": {}
 }
