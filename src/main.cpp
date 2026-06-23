@@ -3,10 +3,11 @@
 #include <Geode/binding/SimplePlayer.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <vector>
+#include <Geode/utils/JsonValidation.hpp>
 
 using namespace geode::prelude;
 
-// --- Advanced Spatial Data Struct ---
+// --- Global Memory ---
 struct GhostFrame {
     cocos2d::CCPoint position;
     float rotation;
@@ -14,63 +15,43 @@ struct GhostFrame {
     int iconID;
 };
 
-// --- Global Memory Tape Reels ---
 static inline std::vector<GhostFrame> g_ghostTape;
-static inline std::vector<size_t> g_checkpointTapeMarks;
 static inline size_t g_liveFrameCounter = 0;
 static inline SimplePlayer* g_mirrorGhost = nullptr;
-static inline GJGameLevel* g_recordedLevel = nullptr;
 static inline IconType g_lastGhostType = IconType::Cube;
 
-// Tuned for your POCO X7 Pro's 120Hz display
-constexpr size_t OFFSET_FRAMES = 80; 
-
-// --- Helper Functions ---
-
-IconType getCurrentIconType(PlayerObject* player) {
-    if (player->m_isShip) return IconType::Ship;
-    if (player->m_isBall) return IconType::Ball;
-    if (player->m_isBird) return IconType::Ufo;
-    if (player->m_isDart) return IconType::Wave;
-    if (player->m_isRobot) return IconType::Robot;
-    if (player->m_isSpider) return IconType::Spider;
-    if (player->m_isSwing) return IconType::Swing;
-    return IconType::Cube;
+// --- Persistence Logic ---
+void saveGhostData() {
+    auto data = matjson::Array();
+    for (const auto& frame : g_ghostTape) {
+        auto obj = matjson::Object();
+        obj["x"] = frame.position.x;
+        obj["y"] = frame.position.y;
+        obj["rot"] = frame.rotation;
+        obj["type"] = (int)frame.iconType;
+        obj["id"] = frame.iconID;
+        data.push_back(obj);
+    }
+    Mod::get()->saveData("ghost_data.json", data);
 }
 
-int getIconIdForType(IconType type) {
-    auto gm = GameManager::sharedState();
-    if (!gm) return 1;
-    switch (type) {
-        case IconType::Ship:   return gm->getPlayerShip();
-        case IconType::Ball:   return gm->getPlayerBall();
-        case IconType::Ufo:    return gm->getPlayerBird();
-        case IconType::Wave:   return gm->getPlayerDart();
-        case IconType::Robot:  return gm->getPlayerRobot();
-        case IconType::Spider: return gm->getPlayerSpider();
-        case IconType::Swing:  return gm->getPlayerSwing();
-        default:               return gm->getPlayerFrame();
+void loadGhostData() {
+    auto data = Mod::get()->loadData("ghost_data.json");
+    if (data.isArray()) {
+        g_ghostTape.clear();
+        for (auto& item : data.asArray()) {
+            g_ghostTape.push_back({
+                { (float)item["x"].asDouble(), (float)item["y"].asDouble() },
+                (float)item["rot"].asDouble(),
+                (IconType)item["type"].asInt(),
+                item["id"].asInt()
+            });
+        }
     }
 }
 
-void spawnGhostBot(PlayLayer* playLayer) {
-    if (g_mirrorGhost || !playLayer->m_objectLayer) return;
+// ... [Keep your existing getCurrentIconType and getIconIdForType functions here] ...
 
-    auto gm = GameManager::sharedState();
-    int defaultCubeID = gm ? gm->getPlayerFrame() : 1;
-
-    auto ghost = SimplePlayer::create(defaultCubeID); 
-    if (ghost) {
-        ghost->setOpacity(130);
-        ghost->setColor(cocos2d::ccColor3B{0, 255, 255});
-        
-        playLayer->m_objectLayer->addChild(ghost, 999);
-        g_mirrorGhost = ghost;
-        g_lastGhostType = IconType::Cube;
-    }
-}
-
-// --- Hook Implementations ---
 class $modify(GhostPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
@@ -78,107 +59,26 @@ class $modify(GhostPlayLayer, PlayLayer) {
         g_liveFrameCounter = 0;
         g_mirrorGhost = nullptr;
         
-        if (g_recordedLevel != level) {
-            g_ghostTape.clear();
-            g_checkpointTapeMarks.clear();
-            g_recordedLevel = level;
-        }
+        // Load existing ghost on startup!
+        loadGhostData();
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhostBot(this);
         }
-
         return true;
     }
 
     void resetLevel() {
         PlayLayer::resetLevel();
-        
-        // Reset clock and force ghost to revert to Cube mode on death
         g_liveFrameCounter = 0;
-        g_lastGhostType = IconType::Cube; 
-
-        if (g_mirrorGhost) {
-            g_mirrorGhost->setVisible(true);
-            
-            // Force the ghost to re-render as a cube immediately
-            auto gm = GameManager::sharedState();
-            int cubeID = gm ? gm->getPlayerFrame() : 1;
-            g_mirrorGhost->updatePlayerFrame(cubeID, IconType::Cube);
-            
-            if (!g_ghostTape.empty()) {
-                g_mirrorGhost->setPosition(g_ghostTape[0].position);
-                g_mirrorGhost->setRotation(g_ghostTape[0].rotation);
-            }
-        }
-    }
-    
-    void postUpdate(float dt) {
-        PlayLayer::postUpdate(dt);
-        
-        if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            spawnGhostBot(this);
-        }
-
-        if (!g_mirrorGhost) return;
-
-        if (this->m_isPracticeMode && this->m_player1) {
-            IconType currentType = getCurrentIconType(this->m_player1);
-            int currentID = getIconIdForType(currentType);
-
-            g_ghostTape.push_back({
-                this->m_player1->getPosition(),
-                this->m_player1->getRotation(),
-                currentType,
-                currentID
-            });
-        }
-        else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
-            size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
-            
-            if (ghostTargetFrame < g_ghostTape.size()) {
-                g_mirrorGhost->setVisible(true);
-                GhostFrame targetData = g_ghostTape[ghostTargetFrame];
-                
-                g_mirrorGhost->setPosition(targetData.position);
-                g_mirrorGhost->setRotation(targetData.rotation);
-
-                if (targetData.iconType != g_lastGhostType) {
-                    g_mirrorGhost->updatePlayerFrame(targetData.iconID, targetData.iconType);
-                    
-                    if (targetData.iconType == IconType::Robot) g_mirrorGhost->createRobotSprite(targetData.iconID);
-                    if (targetData.iconType == IconType::Spider) g_mirrorGhost->createSpiderSprite(targetData.iconID);
-                    
-                    g_lastGhostType = targetData.iconType;
-                }
-            } else {
-                g_mirrorGhost->setVisible(false);
-            }
-            g_liveFrameCounter++;
-        }
+        // ... [Your existing reset logic] ...
     }
 
-    void storeCheckpoint(CheckpointObject* checkpoint) {
-        PlayLayer::storeCheckpoint(checkpoint);
-        if (this->m_isPracticeMode) {
-            g_checkpointTapeMarks.push_back(g_ghostTape.size());
-        }
+    // Call this whenever you finish a practice run to lock it in forever
+    void onQuit() {
+        saveGhostData();
+        PlayLayer::onQuit();
     }
 
-    void loadFromCheckpoint(CheckpointObject* checkpoint) {
-        PlayLayer::loadFromCheckpoint(checkpoint);
-        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
-            size_t rollbackFrame = g_checkpointTapeMarks.back();
-            if (rollbackFrame <= g_ghostTape.size()) {
-                g_ghostTape.resize(rollbackFrame);
-            }
-        }
-    }
-
-    void removeCheckpoint(bool p0) {
-        PlayLayer::removeCheckpoint(p0);
-        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
-            g_checkpointTapeMarks.pop_back();
-        }
-    }
+    // ... [Keep your existing postUpdate and checkpoint logic] ...
 };
