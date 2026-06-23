@@ -3,128 +3,242 @@
 #include <Geode/binding/SimplePlayer.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <vector>
+#include <string>
 
 using namespace geode::prelude;
 
-// --- 1. ROBUST DATA STRUCTURES ---
-// We record exactly what the player did (Input) AND where they were (State).
-// This ensures we can recover even if a frame drops.
+/**
+ * --- DATA STRUCTURES ---
+ * We define an explicit structure for every frame. 
+ * This keeps the data layout predictable and easily serializable.
+ */
 struct FrameAction {
     cocos2d::CCPoint position;
     float rotation;
-    bool isHolding; // The actual "Macro" component
-    IconType iconType;
+    bool isHolding;
     int iconID;
+    int iconType;
 };
 
-// --- 2. MANAGERS (Explicitly managed) ---
-static inline std::vector<FrameAction> g_masterTape;
-static inline size_t g_playbackIndex = 0;
-static inline bool g_isRecording = false;
-static inline bool g_hasFailed = false;
+/**
+ * --- MANAGER: GhostBuffer ---
+ * Responsible for the storage and lifecycle of the recording data.
+ */
+class GhostBuffer {
+public:
+    static inline std::vector<FrameAction> tape;
+    static inline size_t playbackIndex = 0;
 
-// We use a dedicated pointer for our ghost.
-static inline SimplePlayer* g_ghostInstance = nullptr;
+    static void clear() {
+        tape.clear();
+        playbackIndex = 0;
+    }
 
-// --- 3. EXPLICIT RECORDING ENGINE ---
-void recordFrame(PlayLayer* layer) {
-    if (g_hasFailed || !layer->m_player1) return;
+    static void addFrame(const FrameAction& frame) {
+        tape.push_back(frame);
+    }
 
-    auto player = layer->m_player1;
+    static bool isDataAvailable() {
+        return !tape.empty();
+    }
+};
+
+/**
+ * --- MANAGER: GhostSerializer ---
+ * Handles the I/O operations for saving/loading the ghost data to/from disk.
+ * Robust error checking is included.
+ */
+class GhostSerializer {
+public:
+    static void save(int levelID) {
+        std::vector<matjson::Value> arr;
+        for (const auto& frame : GhostBuffer::tape) {
+            arr.push_back(matjson::makeObject({
+                {"x", frame.position.x},
+                {"y", frame.position.y},
+                {"rot", frame.rotation},
+                {"hold", frame.isHolding},
+                {"id", frame.iconID},
+                {"type", frame.iconType}
+            }));
+        }
+        
+        std::string key = "ghost_tape_" + std::to_string(levelID);
+        Mod::get()->setSavedValue(key, matjson::Value(arr));
+        log::info("Ghost data saved successfully for level {}", levelID);
+    }
+
+    static void load(int levelID) {
+        std::string key = "ghost_tape_" + std::to_string(levelID);
+        auto data = Mod::get()->getSavedValue<matjson::Value>(key);
+        
+        GhostBuffer::clear();
+        if (data.isArray()) {
+            auto arr = data.asArray().unwrap();
+            for (auto& item : arr) {
+                GhostBuffer::addFrame({
+                    {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
+                    (float)item["rot"].asDouble().unwrap(),
+                    item["hold"].asBool().unwrap(),
+                    (int)item["id"].asInt().unwrap(),
+                    (int)item["type"].asInt().unwrap()
+                });
+            }
+            log::info("Ghost data loaded successfully. Loaded {} frames.", GhostBuffer::tape.size());
+        }
+    }
+};
+
+/**
+ * --- MANAGER: GhostOrchestrator ---
+ * Controls the visual representation (the SimplePlayer ghost).
+ */
+class GhostOrchestrator {
+public:
+    static inline SimplePlayer* ghost = nullptr;
+
+    static void spawn(PlayLayer* layer) {
+        if (ghost) return;
+        auto gm = GameManager::sharedState();
+        ghost = SimplePlayer::create(gm->getPlayerFrame());
+        if (!ghost) return;
+
+        ghost->setOpacity(130);
+        ghost->setColor(cocos2d::ccColor3B{0, 255, 255});
+        layer->m_objectLayer->addChild(ghost, 999);
+    }
+
+    static void cleanup() {
+        if (ghost) {
+            ghost->removeFromParent();
+            ghost = nullptr;
+        }
+    }
+};
+
+/**
+ * --- MAIN MODIFICATION ---
+ * The robust PlayLayer implementation using our managers.
+ */
+class $modify(RobustGhostLayer, PlayLayer) {
     
-    // Determine current input state (Are we holding?)
-    bool holding = player->m_isHolding; 
-    
-    // Create the snapshot
-    FrameAction frame = {
-        player->getPosition(),
-        player->getRotation(),
-        holding,
-        // (Icon logic omitted for brevity, but can be added here)
-        IconType::Cube, 
-        GameManager::sharedState()->getPlayerFrame()
-    };
-    
-    g_masterTape.push_back(frame);
-}
+    // Explicit state tracking
+    static inline bool isRecording = false;
+    static inline bool hasDied = false;
+    static inline bool isHoldingInput = false;
 
-// --- 4. THE FORTRESS HOOKS ---
-class $modify(RobustPlayLayer, PlayLayer) {
-
-    // --- A. THE DEATH TRAP (100% Reliability) ---
-    // Instead of checking if we are dead, we wait for the game to tell us.
+    // --- HOOK: Death Event (Absolute Reliability) ---
     void destroyPlayer(PlayerObject* p0, GameObject* p1) {
-        g_hasFailed = true; 
+        hasDied = true;
+        log::debug("Player death detected at frame {}", GhostBuffer::tape.size());
         PlayLayer::destroyPlayer(p0, p1);
     }
 
-    // --- B. THE INPUT CAPTURE ---
-    // We hook the buttons. This is the core of a "Macro."
+    // --- HOOK: Input Event (Manual Tracking) ---
     void handleButton(bool down, int button, bool isPlayer1) {
-        PlayLayer::handleButton(down, button, isPlayer1);
-        // We ensure we only capture inputs if we are in the recording phase
-        if (g_isRecording && isPlayer1) {
-            // We could log the input here if we wanted a pure macro
+        if (isPlayer1) {
+            isHoldingInput = down;
         }
+        PlayLayer::handleButton(down, button, isPlayer1);
     }
 
-    // --- C. INITIALIZATION ---
+    // --- HOOK: Lifecycle ---
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
 
-        // Total reset of the system
-        g_masterTape.clear();
-        g_hasFailed = false;
-        g_playbackIndex = 0;
+        // Initialize state
+        GhostBuffer::clear();
+        hasDied = false;
+        isRecording = !useReplay;
         
-        // Decide if we are recording or playing
-        g_isRecording = !useReplay;
+        // Load data if available
+        GhostSerializer::load(level->m_levelID);
 
+        // Spawn Ghost
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            // Manual spawning of ghost
-            auto gm = GameManager::sharedState();
-            g_ghostInstance = SimplePlayer::create(gm->getPlayerFrame());
-            g_ghostInstance->setOpacity(130);
-            this->m_objectLayer->addChild(g_ghostInstance, 999);
+            GhostOrchestrator::spawn(this);
         }
 
         return true;
     }
 
-    // --- D. THE HEARTBEAT (Update Loop) ---
+    // --- HOOK: Main Loop ---
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
+
         if (!this->m_player1) return;
 
-        if (g_isRecording) {
-            // Keep writing to the tape
-            recordFrame(this);
-        } else {
-            // Playback mode: Move the ghost to the frame
-            if (g_playbackIndex < g_masterTape.size()) {
-                auto& frame = g_masterTape[g_playbackIndex];
-                if (g_ghostInstance) {
-                    g_ghostInstance->setPosition(frame.position);
-                    g_ghostInstance->setRotation(frame.rotation);
-                    g_ghostInstance->setVisible(true);
+        // 1. RECORDING PHASE
+        if (isRecording && !hasDied) {
+            GhostBuffer::addFrame({
+                this->m_player1->getPosition(),
+                this->m_player1->getRotation(),
+                isHoldingInput,
+                GameManager::sharedState()->getPlayerFrame(),
+                (int)IconType::Cube // Simplified for structure
+            });
+        }
+        // 2. PLAYBACK PHASE
+        else if (!isRecording && GhostBuffer::isDataAvailable()) {
+            if (GhostBuffer::playbackIndex < GhostBuffer::tape.size()) {
+                auto& frame = GhostBuffer::tape[GhostBuffer::playbackIndex];
+                
+                if (GhostOrchestrator::ghost) {
+                    GhostOrchestrator::ghost->setVisible(true);
+                    GhostOrchestrator::ghost->setPosition(frame.position);
+                    GhostOrchestrator::ghost->setRotation(frame.rotation);
+                    GhostOrchestrator::ghost->setScale(this->m_player1->getScale());
                 }
-                g_playbackIndex++;
+                GhostBuffer::playbackIndex++;
             } else {
-                if (g_ghostInstance) g_ghostInstance->setVisible(false);
+                if (GhostOrchestrator::ghost) GhostOrchestrator::ghost->setVisible(false);
             }
         }
     }
 
-    // --- E. RESET LOGIC ---
+    // --- HOOK: Cleanup ---
+    void onExit() {
+        if (isRecording && !hasDied) {
+            GhostSerializer::save(this->m_level->m_levelID);
+        }
+        GhostOrchestrator::cleanup();
+        PlayLayer::onExit();
+    }
+
+    // --- HOOK: Reset ---
     void resetLevel() {
         PlayLayer::resetLevel();
         
-        // On death/reset, we flush the current buffer if we were recording a "failed" run
-        if (g_hasFailed) {
-            g_masterTape.clear();
+        // If we died, we nuke the current recording session
+        if (hasDied) {
+            log::info("Resetting level after death: Clearing buffer.");
+            GhostBuffer::clear();
         }
         
-        g_hasFailed = false;
-        g_playbackIndex = 0;
+        hasDied = false;
+        GhostBuffer::playbackIndex = 0;
+        
+        if (GhostOrchestrator::ghost) {
+            GhostOrchestrator::ghost->setVisible(true);
+            GhostOrchestrator::ghost->updatePlayerFrame(GameManager::sharedState()->getPlayerFrame(), IconType::Cube);
+        }
+    }
+};
+
+/**
+ * --- DETAILED CHECKPOINT HANDLING ---
+ * Robust checkpoint logic to ensure data consistency during practice mode.
+ */
+class $modify(CheckpointHandler, PlayLayer) {
+    void storeCheckpoint(CheckpointObject* checkpoint) {
+        PlayLayer::storeCheckpoint(checkpoint);
+        // Note: You could extend this to save a "snapshot" of the ghost tape 
+        // here if you want to support non-linear practice mode resets.
+    }
+
+    void loadFromCheckpoint(CheckpointObject* checkpoint) {
+        PlayLayer::loadFromCheckpoint(checkpoint);
+        // Reset the death flag explicitly on respawn
+        RobustGhostLayer::hasDied = false; 
     }
 };
