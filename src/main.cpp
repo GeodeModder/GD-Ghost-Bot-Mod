@@ -46,12 +46,16 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
-            // nullptr here cuts off the engine's internal player array registration
             auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
+                
+                // FORCE TRAIL OFF: This kills the invisible jumping trail completely
+                if (ghost->m_trail) {
+                    ghost->m_trail->setVisible(false);
+                }
                 
                 ghost->setScale(this->m_player1->getScale()); 
                 ghost->setOpacity(130);
@@ -93,14 +97,19 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setVisible(true);
                 syncGhostGamemode(ghost, player);
 
-                // Force explicit layout positions directly
+                // Re-verify trail is dead every frame
+                if (ghost->m_trail) {
+                    ghost->m_trail->setVisible(false);
+                }
+
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
                 
-                ghost->update(dt);
+                // COMMENTED OUT: Paralyzes internal engine physics entirely
+                // ghost->update(dt);
             }
         } else {
             if (m_fields->m_ghostBot) {
