@@ -25,14 +25,14 @@ static inline IconType g_lastGhostType = IconType::Cube;
 // Tuned for your POCO X7 Pro's 120Hz display: 80 frames = ~0.66 seconds look-ahead preview
 constexpr size_t OFFSET_FRAMES = 80; 
 
-// --- Helper Functions (Fixed Enum Names) ---
+// --- Helper Functions ---
 
 // Helper to deduce the active gamemode state from PlayerObject
 IconType getCurrentIconType(PlayerObject* player) {
     if (player->m_isShip) return IconType::Ship;
     if (player->m_isBall) return IconType::Ball;
-    if (player->m_isBird) return IconType::Ufo;    // Fixed: Changed Bird to Ufo
-    if (player->m_isDart) return IconType::Wave;   // Fixed: Changed Dart to Wave
+    if (player->m_isBird) return IconType::Ufo;    
+    if (player->m_isDart) return IconType::Wave;   
     if (player->m_isRobot) return IconType::Robot;
     if (player->m_isSpider) return IconType::Spider;
     if (player->m_isSwing) return IconType::Swing;
@@ -46,15 +46,14 @@ int getIconIdForType(IconType type) {
     switch (type) {
         case IconType::Ship:   return gm->getPlayerShip();
         case IconType::Ball:   return gm->getPlayerBall();
-        case IconType::Ufo:    return gm->getPlayerBird(); // Fixed: Changed Bird to Ufo
-        case IconType::Wave:   return gm->getPlayerDart(); // Fixed: Changed Dart to Wave
+        case IconType::Ufo:    return gm->getPlayerBird(); 
+        case IconType::Wave:   return gm->getPlayerDart(); 
         case IconType::Robot:  return gm->getPlayerRobot();
         case IconType::Spider: return gm->getPlayerSpider();
         case IconType::Swing:  return gm->getPlayerSwing();
         default:               return gm->getPlayerFrame();
     }
 }
-
 
 void spawnGhostBot(PlayLayer* playLayer) {
     if (g_mirrorGhost || !playLayer->m_objectLayer) return;
@@ -65,7 +64,7 @@ void spawnGhostBot(PlayLayer* playLayer) {
     // SimplePlayer initialization (Crash-safe cardboard cutout)
     auto ghost = SimplePlayer::create(defaultCubeID); 
     if (ghost) {
-        ghost->setOpacity(130); // Clean phantom glow
+        ghost->setOpacity(130); // Visual transparency so it doesn't block upcoming obstacles
         ghost->setColor(cocos2d::ccColor3B{0, 255, 255}); // Electric Cyan guide color
         
         // Pin securely to the level object layer to sync camera/parallax matrices
@@ -95,6 +94,24 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
 
         return true;
+    }
+
+    // --- RESET LEVEL / PLAYER DEATH HANDLING ---
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        
+        // Rewind the ghost's clock back to frame 0 the exact millisecond you respawn!
+        g_liveFrameCounter = 0;
+        g_lastGhostType = IconType::Cube;
+
+        if (g_mirrorGhost) {
+            g_mirrorGhost->setVisible(true);
+            // Snap the ghost immediately back to the first recorded frame position
+            if (!g_ghostTape.empty()) {
+                g_mirrorGhost->setPosition(g_ghostTape[0].position);
+                g_mirrorGhost->setRotation(g_ghostTape[0].rotation);
+            }
+        }
     }
     
     void postUpdate(float dt) {
