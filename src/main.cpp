@@ -23,11 +23,13 @@ static inline IconType g_lastGhostType = IconType::Cube;
 
 constexpr size_t OFFSET_FRAMES = 80;
 
-// --- 2. HELPERS (Persistence & Logic) ---
+// --- 2. HELPERS ---
 void saveGhostData() {
-    matjson::Value data = matjson::Value(std::vector<matjson::Value>{});
+    // Explicitly using Array() to ensure push_back works
+    matjson::Value data = matjson::Array(); 
+    
     for (const auto& frame : g_ghostTape) {
-        matjson::Value obj = matjson::Value();
+        matjson::Value obj = matjson::Object();
         obj["x"] = frame.position.x;
         obj["y"] = frame.position.y;
         obj["rot"] = frame.rotation;
@@ -35,7 +37,7 @@ void saveGhostData() {
         obj["id"] = frame.iconID;
         data.push_back(obj);
     }
-    Mod::get()->setSavedValue<matjson::Value>("ghost_tape", data);
+    Mod::get()->setSavedValue("ghost_tape", data);
 }
 
 void loadGhostData() {
@@ -47,7 +49,7 @@ void loadGhostData() {
                 {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
                 (float)item["rot"].asDouble().unwrap(),
                 (IconType)item["type"].asInt().unwrap(),
-                static_cast<int>(item["id"].asInt().unwrap())
+                (int)item["id"].asInt().unwrap()
             });
         }
     }
@@ -105,7 +107,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
             g_ghostTape.clear();
             g_checkpointTapeMarks.clear();
             g_recordedLevel = level;
-            loadGhostData(); // Auto-load existing ghost
+            loadGhostData();
         }
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
@@ -114,5 +116,73 @@ class $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    void onQuit() {
-        saveGhostData(); // Auto-save on exit
+    // Switched to onExit, it's safer for lifecycle cleanup
+    void onExit() {
+        saveGhostData();
+        PlayLayer::onExit();
+    }
+
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        g_liveFrameCounter = 0;
+        g_lastGhostType = IconType::Cube;
+        if (g_mirrorGhost) {
+            g_mirrorGhost->setVisible(true);
+            g_mirrorGhost->updatePlayerFrame(GameManager::sharedState()->getPlayerFrame(), IconType::Cube);
+        }
+    }
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
+        if (!g_mirrorGhost) return;
+
+        if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
+            IconType currentType = getCurrentIconType(this->m_player1);
+            g_ghostTape.push_back({
+                this->m_player1->getPosition(),
+                this->m_player1->getRotation(),
+                currentType,
+                getIconIdForType(currentType)
+            });
+        }
+        else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
+            size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
+            if (ghostTargetFrame < g_ghostTape.size()) {
+                g_mirrorGhost->setVisible(true);
+                GhostFrame targetData = g_ghostTape[ghostTargetFrame];
+                
+                g_mirrorGhost->setPosition(targetData.position);
+                g_mirrorGhost->setRotation(targetData.rotation);
+                g_mirrorGhost->setScale(this->m_player1->getScale()); 
+
+                if (targetData.iconType != g_lastGhostType) {
+                    g_mirrorGhost->updatePlayerFrame(targetData.iconID, targetData.iconType);
+                    if (targetData.iconType == IconType::Robot) g_mirrorGhost->createRobotSprite(targetData.iconID);
+                    if (targetData.iconType == IconType::Spider) g_mirrorGhost->createSpiderSprite(targetData.iconID);
+                    g_lastGhostType = targetData.iconType;
+                }
+            } else {
+                g_mirrorGhost->setVisible(false);
+            }
+            g_liveFrameCounter++;
+        }
+    }
+
+    void storeCheckpoint(CheckpointObject* checkpoint) {
+        PlayLayer::storeCheckpoint(checkpoint);
+        if (this->m_isPracticeMode) g_checkpointTapeMarks.push_back(g_ghostTape.size());
+    }
+
+    void loadFromCheckpoint(CheckpointObject* checkpoint) {
+        PlayLayer::loadFromCheckpoint(checkpoint);
+        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
+            g_ghostTape.resize(g_checkpointTapeMarks.back());
+        }
+    }
+
+    void removeCheckpoint(bool p0) {
+        PlayLayer::removeCheckpoint(p0);
+        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) g_checkpointTapeMarks.pop_back();
+    }
+};
