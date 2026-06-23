@@ -9,6 +9,7 @@ using namespace geode::prelude;
 /**
  * --- DATA STRUCTURE: GhostFrame ---
  * A clean, singular definition of a frame in our ghost tape.
+ * This is the atomic unit of our ghost's movement.
  */
 struct GhostFrame {
     cocos2d::CCPoint position;
@@ -27,10 +28,10 @@ class $modify(GhostPlayLayer, PlayLayer) {
     
     /**
      * --- GEODE FIELDS ---
-     * This is where we store all our state variables. 
-     * This fixes the "improper custom fields" error.
+     * This is the correct syntax for Geode fields. 
+     * The compiler macro handles everything, so no 'struct' keyword needed.
      */
-    struct $add(Fields) {
+    $add(Fields) {
         std::vector<GhostFrame> m_ghostTape;
         size_t m_playbackIndex = 0;
         bool m_isRecording = false;
@@ -40,6 +41,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
     };
 
     // --- A. THE DEATH TRAP ---
+    // We hook the death event to signal that the current recording run is corrupted.
     void destroyPlayer(PlayerObject* p0, GameObject* p1) {
         m_fields->m_hasDied = true;
         log::debug("Ghost: Player death detected. Stopping tape.");
@@ -47,6 +49,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
     }
 
     // --- B. THE INPUT CAPTURE ---
+    // Manually tracking the hold state so we can replicate the exact movement.
     void handleButton(bool down, int button, bool isPlayer1) {
         if (isPlayer1) {
             m_fields->m_isHoldingInput = down;
@@ -55,6 +58,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
     }
 
     // --- C. INITIALIZATION ---
+    // This is the constructor logic for our PlayLayer.
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
 
@@ -64,8 +68,10 @@ class $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_hasDied = false;
         m_fields->m_isRecording = !useReplay;
         
+        // Load data from persistent storage
         loadFromStorage(level->m_levelID);
 
+        // Spawn Ghost Player
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhost();
         }
@@ -74,6 +80,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
     }
 
     // --- D. GHOST SPAWNER ---
+    // Instantiates the ghost player visual representation.
     void spawnGhost() {
         if (m_fields->m_ghostPlayer) return;
 
@@ -88,7 +95,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // --- E. PERSISTENCE LAYER ---
+    // --- E. PERSISTENCE LAYER: Save ---
+    // Saves the tape data to disk for later viewing.
     void saveToStorage(int levelID) {
         std::vector<matjson::Value> arr;
         for (const auto& frame : m_fields->m_ghostTape) {
@@ -105,6 +113,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         log::debug("Ghost: Saved {} frames.", m_fields->m_ghostTape.size());
     }
 
+    // --- F. PERSISTENCE LAYER: Load ---
+    // Loads the tape data from disk for playback.
     void loadFromStorage(int levelID) {
         std::string key = "ghost_tape_" + std::to_string(levelID);
         auto data = Mod::get()->getSavedValue<matjson::Value>(key);
@@ -124,7 +134,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // --- F. THE HEARTBEAT ---
+    // --- G. THE HEARTBEAT ---
+    // This runs every single frame of the game.
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
@@ -158,7 +169,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // --- G. RESET LOGIC ---
+    // --- H. RESET LOGIC ---
+    // Cleans up the state when the player dies or restarts the level.
     void resetLevel() {
         PlayLayer::resetLevel();
         
@@ -175,17 +187,15 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // --- H. CHECKPOINT HANDLING (Integrated) ---
-    void storeCheckpoint(CheckpointObject* checkpoint) {
-        PlayLayer::storeCheckpoint(checkpoint);
-    }
-
+    // --- I. CHECKPOINT HANDLING ---
+    // Ensuring death flag is cleared on respawn from a checkpoint.
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
-        m_fields->m_hasDied = false; // Reset death flag
+        m_fields->m_hasDied = false;
     }
 
-    // --- I. EXIT LOGIC ---
+    // --- J. EXIT LOGIC ---
+    // Saves the tape data when exiting the level.
     void onExit() {
         if (m_fields->m_isRecording && !m_fields->m_hasDied) {
             saveToStorage(this->m_level->m_levelID);
