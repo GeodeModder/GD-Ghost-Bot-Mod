@@ -1,62 +1,90 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
-#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/binding/SimplePlayer.hpp>
+#include <Geode/binding/GameManager.hpp>
 #include <vector>
 
 using namespace geode::prelude;
 
-// --- Data Structures ---
+// --- Advanced Spatial Data Struct ---
 struct GhostFrame {
     cocos2d::CCPoint position;
     float rotation;
-    bool isShip;
-    bool isBall;
-    bool isBird;
-    bool isDart;
-    bool isRobot;
-    bool isSpider;
-    bool isSwing;
+    IconType iconType;
+    int iconID;
 };
 
-// --- Global State Management ---
-static inline std::vector<GhostFrame> g_goldenMacro; 
-static inline std::vector<size_t> g_checkpointTapeMarks; 
-static inline PlayerObject* g_mirrorGhost = nullptr;
+// --- Global Memory Tape Reels ---
+static inline std::vector<GhostFrame> g_ghostTape;
+static inline std::vector<size_t> g_checkpointTapeMarks;
 static inline size_t g_liveFrameCounter = 0;
+static inline SimplePlayer* g_mirrorGhost = nullptr;
 static inline GJGameLevel* g_recordedLevel = nullptr;
+static inline IconType g_lastGhostType = IconType::Cube;
 
-// 120 FPS Optimization: ~80 frames ahead is roughly 0.66 seconds.
-static const size_t OFFSET_FRAMES = 80; 
+// Tuned for your POCO X7 Pro's 120Hz display: 80 frames = ~0.66 seconds look-ahead preview
+constexpr size_t OFFSET_FRAMES = 80; 
 
-// --- Forward Declarations of Helpers ---
-void spawnGhostBot(PlayLayer* playLayer);
-void syncGhostState(PlayerObject* ghost, const GhostFrame& frame);
+// --- Helper Functions ---
 
-// --- 1. THE INPUT WALL ---
-class $modify(GhostPlayerObject, PlayerObject) {
-    void pushButton(PlayerButton btn) {
-        if (this == g_mirrorGhost) return; // Ignore live clicks completely
-        PlayerObject::pushButton(btn);
+// Helper to deduce the active gamemode state from PlayerObject
+IconType getCurrentIconType(PlayerObject* player) {
+    if (player->m_isShip) return IconType::Ship;
+    if (player->m_isBall) return IconType::Ball;
+    if (player->m_isBird) return IconType::Bird; // UFO
+    if (player->m_isDart) return IconType::Dart; // Wave
+    if (player->m_isRobot) return IconType::Robot;
+    if (player->m_isSpider) return IconType::Spider;
+    if (player->m_isSwing) return IconType::Swing;
+    return IconType::Cube;
+}
+
+// Helper to fetch your custom icon configurations from GameManager
+int getIconIdForType(IconType type) {
+    auto gm = GameManager::sharedState();
+    if (!gm) return 1;
+    switch (type) {
+        case IconType::Ship:   return gm->getPlayerShip();
+        case IconType::Ball:   return gm->getPlayerBall();
+        case IconType::Bird:   return gm->getPlayerBird();
+        case IconType::Dart:   return gm->getPlayerDart();
+        case IconType::Robot:  return gm->getPlayerRobot();
+        case IconType::Spider: return gm->getPlayerSpider();
+        case IconType::Swing:  return gm->getPlayerSwing();
+        default:               return gm->getPlayerFrame();
     }
+}
 
-    void releaseButton(PlayerButton btn) {
-        if (this == g_mirrorGhost) return; // Ignore live releases completely
-        PlayerObject::releaseButton(btn);
+void spawnGhostBot(PlayLayer* playLayer) {
+    if (g_mirrorGhost || !playLayer->m_objectLayer) return;
+
+    auto gm = GameManager::sharedState();
+    int defaultCubeID = gm ? gm->getPlayerFrame() : 1;
+
+    // SimplePlayer initialization (Crash-safe cardboard cutout)
+    auto ghost = SimplePlayer::create(defaultCubeID); 
+    if (ghost) {
+        ghost->setOpacity(130); // Clean phantom glow
+        ghost->setColor(cocos2d::ccColor3B{0, 255, 255}); // Electric Cyan guide color
+        
+        // Pin securely to the level object layer to sync camera/parallax matrices
+        playLayer->m_objectLayer->addChild(ghost, 999);
+        g_mirrorGhost = ghost;
+        g_lastGhostType = IconType::Cube;
     }
-    // playerMoveX deleted here to satisfy the compiler bindings!
-};
+}
 
-// --- 2. THE PERFORMANCE MIRROR CORE ENGINE ---
-class $modify(MirrorLayer, PlayLayer) {
+// --- Hook Implementations ---
+class $modify(GhostPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
         
-        g_mirrorGhost = nullptr;
         g_liveFrameCounter = 0;
-
-        // If switching to a completely different level, wipe the macro library clean
+        g_mirrorGhost = nullptr;
+        
+        // Wipe historical tape cache only if jumping to an entirely separate level file
         if (g_recordedLevel != level) {
-            g_goldenMacro.clear();
+            g_ghostTape.clear();
             g_checkpointTapeMarks.clear();
             g_recordedLevel = level;
         }
@@ -67,133 +95,79 @@ class $modify(MirrorLayer, PlayLayer) {
 
         return true;
     }
-
-    void resetLevel() {
-        // Clear old ghost instance safely before resetting the engine
-        if (g_mirrorGhost) {
-            g_mirrorGhost->removeFromParent();
-            g_mirrorGhost = nullptr;
+    
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        
+        if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) {
+            spawnGhostBot(this);
         }
 
-        PlayLayer::resetLevel();
-        
-        // Reset our playback clock back to the start line
-        g_liveFrameCounter = 0; 
+        if (!g_mirrorGhost) return;
 
-        if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            spawnGhostBot(this);
+        // --- MODE A: LASER-ACCURATE PRACTICE MODE RECORDING ---
+        if (this->m_isPracticeMode && this->m_player1) {
+            IconType currentType = getCurrentIconType(this->m_player1);
+            int currentID = getIconIdForType(currentType);
+
+            g_ghostTape.push_back({
+                this->m_player1->getPosition(),
+                this->m_player1->getRotation(),
+                currentType,
+                currentID
+            });
+        }
+        // --- MODE B: THE CHRONO-MORPH PLAYBACK ---
+        else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
+            size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
+            
+            if (ghostTargetFrame < g_ghostTape.size()) {
+                g_mirrorGhost->setVisible(true);
+                GhostFrame targetData = g_ghostTape[ghostTargetFrame];
+                
+                // Snap physical position/rotation arrays
+                g_mirrorGhost->setPosition(targetData.position);
+                g_mirrorGhost->setRotation(targetData.rotation);
+
+                // Morph skin layout if a portal transition was detected on the tape
+                if (targetData.iconType != g_lastGhostType) {
+                    g_mirrorGhost->updatePlayerFrame(targetData.iconID, targetData.iconType);
+                    
+                    // Native requirements for complex segmented rig animations
+                    if (targetData.iconType == IconType::Robot) g_mirrorGhost->createRobotSprite(targetData.iconID);
+                    if (targetData.iconType == IconType::Spider) g_mirrorGhost->createSpiderSprite(targetData.iconID);
+                    
+                    g_lastGhostType = targetData.iconType;
+                }
+            } else {
+                g_mirrorGhost->setVisible(false); // Hide ghost safely if you break past your record line
+            }
+            g_liveFrameCounter++;
         }
     }
 
-    // --- PRACTICE MODE CHECKPOINT SLICING ---
-    
-    // Fixed: Added CheckpointObject* parameter to match the original Geode signature
+    // --- AUTOMATIC TAPE SLICING MOTIONS ---
     void storeCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::storeCheckpoint(checkpoint);
         if (this->m_isPracticeMode) {
-            g_checkpointTapeMarks.push_back(g_goldenMacro.size());
+            g_checkpointTapeMarks.push_back(g_ghostTape.size());
         }
     }
 
-    // Chop off the garbage frames when you crash and go back
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
-        
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
-            size_t safeTapeSize = g_checkpointTapeMarks.back();
-            g_goldenMacro.resize(safeTapeSize); 
+            size_t rollbackFrame = g_checkpointTapeMarks.back();
+            if (rollbackFrame <= g_ghostTape.size()) {
+                g_ghostTape.resize(rollbackFrame); // Slice off the bloopers
+            }
         }
     }
 
-    // Handle manual checkpoint deletion
     void removeCheckpoint(bool p0) {
         PlayLayer::removeCheckpoint(p0);
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
             g_checkpointTapeMarks.pop_back();
         }
     }
-
-    // --- EVERY-FRAME PROCESSING ---
-    void postUpdate(float dt) {
-        PlayLayer::postUpdate(dt);
-        if (this->m_isPaused || !this->m_player1) return;
-
-        // MODE A: RECORDING THE TRACKS (Practice Mode)
-        if (this->m_isPracticeMode) {
-            GhostFrame currentFrame;
-            currentFrame.position = this->m_player1->getPosition();
-            currentFrame.rotation = this->m_player1->getRotation();
-            
-            // Capture all physical game mode states
-            currentFrame.isShip = this->m_player1->m_isShip;
-            currentFrame.isBall = this->m_player1->m_isBall;
-            currentFrame.isBird = this->m_player1->m_isBird;
-            currentFrame.isDart = this->m_player1->m_isDart;
-            currentFrame.isRobot = this->m_player1->m_isRobot;
-            currentFrame.isSpider = this->m_player1->m_isSpider;
-            currentFrame.isSwing = this->m_player1->m_isSwing;
-
-            g_goldenMacro.push_back(currentFrame);
-        }
-        
-        // MODE B: TIME-TRAVEL PLAYBACK (Normal Mode / Testing your Run)
-        else if (!this->m_isPracticeMode && !g_goldenMacro.empty() && g_mirrorGhost) {
-            size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
-
-            if (ghostTargetFrame < g_goldenMacro.size()) {
-                GhostFrame futureFrame = g_goldenMacro[ghostTargetFrame];
-                
-                // Directly control the puppet strings
-                g_mirrorGhost->setPosition(futureFrame.position);
-                g_mirrorGhost->setRotation(futureFrame.rotation);
-                
-                // Keep gamemode visuals aligned
-                syncGhostState(g_mirrorGhost, futureFrame);
-                g_mirrorGhost->setVisible(true);
-            } else {
-                g_mirrorGhost->setVisible(false);
-            }
-
-            g_liveFrameCounter++;
-        }
-    }
-
-    void onExit() {
-        PlayLayer::onExit();
-        g_mirrorGhost = nullptr; 
-    }
 };
-
-// --- 3. GLOBAL HELPER FUNCTIONS ---
-// Fixed: Extracted out of Fields to live happily in global file scope
-void spawnGhostBot(PlayLayer* playLayer) {
-    if (!g_mirrorGhost && playLayer->m_objectLayer && playLayer->m_player1) {
-        auto ghost = PlayerObject::create(1, 2, playLayer, nullptr, false);
-        if (ghost) {
-            g_mirrorGhost = ghost;
-            
-            ghost->setPosition(playLayer->m_player1->getPosition());
-            ghost->setScale(playLayer->m_player1->getScale()); 
-            
-            ghost->setOpacity(120);
-            ghost->setColor({0, 255, 255}); 
-            ghost->setVisible(false); 
-
-            if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
-            if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
-            if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
-
-            playLayer->addChild(ghost, 999); 
-        }
-    }
-}
-
-void syncGhostState(PlayerObject* ghost, const GhostFrame& frame) {
-    if (ghost->m_isShip != frame.isShip) ghost->toggleFlyMode(frame.isShip, true);
-    if (ghost->m_isBall != frame.isBall) ghost->toggleRollMode(frame.isBall, true);
-    if (ghost->m_isBird != frame.isBird) ghost->toggleBirdMode(frame.isBird, true);
-    if (ghost->m_isDart != frame.isDart) ghost->toggleDartMode(frame.isDart, true);
-    if (ghost->m_isRobot != frame.isRobot) ghost->toggleRobotMode(frame.isRobot, true);
-    if (ghost->m_isSpider != frame.isSpider) ghost->toggleSpiderMode(frame.isSpider, true);
-    if (ghost->m_isSwing != frame.isSwing) ghost->toggleSwingMode(frame.isSwing, true);
-}
