@@ -46,14 +46,14 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
-            // nullptr isolation stops the engine from tracking inputs/updates automatically
-            auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, true);
+            // FIXED: Flipped the 5th argument to 'false' to completely kill autonomous gameplay physics
+            auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, false);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
                 
-                // FIXED: Using verified Geode binding field names to kill the trails
+                // Verified trail removal fields
                 if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
@@ -98,11 +98,11 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setVisible(true);
                 syncGhostGamemode(ghost, player);
 
-                // Keep trails hidden every single frame pass
                 if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
 
+                // Lock it firmly down onto our coordinate tracking matrix
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
