@@ -128,6 +128,12 @@ class $modify(GhostPlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         g_liveFrameCounter = 0;
         g_lastGhostType = IconType::Cube;
+        
+        // If we are in normal mode and die, clear the whole tape to avoid "death runs"
+        if (!this->m_isPracticeMode) {
+            g_ghostTape.clear();
+        }
+
         if (g_mirrorGhost) {
             g_mirrorGhost->setVisible(true);
             g_mirrorGhost->updatePlayerFrame(GameManager::sharedState()->getPlayerFrame(), IconType::Cube);
@@ -139,9 +145,10 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
-        // Corrected: Only checking the player object status
-        bool isDead = (this->m_player1 && this->m_player1->m_isDead);
+        // Death logic: check both level status and player object
+        bool isDead = this->m_levelFailed || (this->m_player1 && this->m_player1->m_isDead);
 
+        // Recording
         if (this->m_isPracticeMode && this->m_player1 && !isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             g_ghostTape.push_back({
