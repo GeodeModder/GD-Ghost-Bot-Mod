@@ -25,42 +25,8 @@ static inline IconType g_lastGhostType = IconType::Cube;
 // Tuned for your POCO X7 Pro's 120Hz display
 constexpr size_t OFFSET_FRAMES = 80; 
 
-
-    Mod::get()->setSavedValue("ghost_tape", data);
-}
-
-// --- Persistence Logic ---
-void saveGhostData() {
-    matjson::Value data = matjson::Array();
-    for (const auto& frame : g_ghostTape) {
-        matjson::Value obj = matjson::Object();
-        obj["x"] = frame.position.x;
-        obj["y"] = frame.position.y;
-        obj["rot"] = frame.rotation;
-        obj["type"] = (int)frame.iconType;
-        obj["id"] = frame.iconID;
-        data.push_back(obj);
-    }
-    Mod::get()->setSavedValue("ghost_tape", data);
-}
-
-void loadGhostData() {
-    auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape");
-    if (data.isArray()) {
-        g_ghostTape.clear();
-        // We use .unwrap() on the array and the individual values to get the raw data
-        for (auto& item : data.asArray().unwrap()) {
-            g_ghostTape.push_back({
-                { (float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap() },
-                (float)item["rot"].asDouble().unwrap(),
-                (IconType)item["type"].asInt().unwrap(),
-                item["id"].asInt().unwrap()
-            });
-        }
-    }
-}
-
 // --- Helper Functions ---
+
 IconType getCurrentIconType(PlayerObject* player) {
     if (player->m_isShip) return IconType::Ship;
     if (player->m_isBall) return IconType::Ball;
@@ -116,7 +82,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
             g_ghostTape.clear();
             g_checkpointTapeMarks.clear();
             g_recordedLevel = level;
-            loadGhostData(); // Added: Load on level init
         }
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
@@ -124,12 +89,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
 
         return true;
-    }
-
-    // Added: Save when leaving the level
-    void onQuit() {
-        saveGhostData();
-        PlayLayer::onQuit();
     }
 
     void resetLevel() {
@@ -154,7 +113,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
     
-    void postUpdate(float dt) {
+        void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
         
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) {
@@ -163,7 +122,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
 
         if (!g_mirrorGhost) return;
 
-        if (this->m_isPracticeMode && this->m_player1) {
+        // ONLY record if in practice mode, the player exists, AND the player isn't dead
+        if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             int currentID = getIconIdForType(currentType);
 
@@ -198,6 +158,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
             g_liveFrameCounter++;
         }
     }
+ g_ghostTape[ghostTargetFrame];
 
     void storeCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::storeCheckpoint(checkpoint);
