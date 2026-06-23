@@ -24,7 +24,6 @@ class $modify(GhostBotLayer, PlayLayer) {
     }
 
     void resetLevel() {
-        // Absolute teardown of the old node to stop the zombie clone glitch at (0,0)
         if (m_fields->m_ghostBot) {
             m_fields->m_ghostBot->removeFromParent();
             m_fields->m_ghostBot = nullptr;
@@ -40,23 +39,20 @@ class $modify(GhostBotLayer, PlayLayer) {
         }
     }
 
-    // Immortal Hook: Bypasses standard hazard destruction routines
     void destroyPlayer(PlayerObject* p1, GameObject* p2) {
         if (m_fields->m_ghostBot && p1 == m_fields->m_ghostBot) return; 
         PlayLayer::destroyPlayer(p1, p2);
     }
 
     void spawnGhostBot() {
-        // Pass nullptr as the gameLayer argument to prevent the engine from registering 
-        // the ghost into PlayLayer's internal input/update array!
         if (!m_fields->m_ghostBot && this->m_objectLayer) {
+            // nullptr here cuts off the engine's internal player array registration
             auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, true);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
                 
-                // Visual setup
                 ghost->setScale(this->m_player1->getScale()); 
                 ghost->setOpacity(130);
                 ghost->setColor({0, 255, 255}); 
@@ -97,19 +93,13 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setVisible(true);
                 syncGhostGamemode(ghost, player);
 
-                // ZERO OUT ENGINE VELOCITY: Paralyzes internal physics computation loops
-                // Even if the engine tries to update it, it physically cannot move on its own.
-                ghost->m_p1 = 0;
-                ghost->m_p2 = 0;
-
-                // Force layout translation match
+                // Force explicit layout positions directly
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
                 
-                // Manually handle visual sprite animations only
                 ghost->update(dt);
             }
         } else {
