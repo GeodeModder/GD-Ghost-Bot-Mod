@@ -139,10 +139,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
-        // --- THE "ANTI-DEATH" RECORDING LOCK ---
-        // We verify death on both the Player object AND the Layer itself. 
-        // If either is true, we kill the recording instantly.
-        bool isDead = this->m_isDead || (this->m_player1 && this->m_player1->m_isDead);
+        // Corrected: Only checking the player object status
+        bool isDead = (this->m_player1 && this->m_player1->m_isDead);
 
         if (this->m_isPracticeMode && this->m_player1 && !isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
@@ -187,11 +185,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
         
-        // Strict Pruning: Only keep the tape up to the last known successful checkpoint.
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
             size_t lastMark = g_checkpointTapeMarks.back();
-            // We force the tape to shrink to the mark, 
-            // guaranteeing that any "death frames" are literally deleted.
             if (g_ghostTape.size() > lastMark) {
                 g_ghostTape.resize(lastMark);
             }
