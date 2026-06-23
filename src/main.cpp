@@ -3,13 +3,15 @@
 #include <Geode/binding/SimplePlayer.hpp>
 #include <Geode/binding/GameManager.hpp>
 #include <vector>
+#include <string>
 
 using namespace geode::prelude;
 
 /**
  * --- DATA STRUCTURE: GhostFrame ---
- * A clean, singular definition of a frame in our ghost tape.
- * This is the atomic unit of our ghost's movement.
+ * This is the 'DNA' of our ghost. Each instance of this 
+ * represents one frame of gameplay. We store just enough
+ * to perfectly reconstruct movement without bloating memory.
  */
 struct GhostFrame {
     cocos2d::CCPoint position;
@@ -20,18 +22,18 @@ struct GhostFrame {
 };
 
 /**
- * --- THE FORTRESS CLASS ---
- * We consolidate everything into one modify block to ensure 
- * state is shared and accessible without hacks.
+ * --- CLASS: GhostPlayLayer ---
+ * The fortress. All code is encapsulated here.
  */
 class $modify(GhostPlayLayer, PlayLayer) {
-    
+
     /**
-     * --- GEODE FIELDS ---
-     * This is the correct syntax for Geode fields. 
-     * The compiler macro handles everything, so no 'struct' keyword needed.
+     * --- STATE STORAGE (Fields) ---
+     * This is the correct Geode syntax. Geode will automatically
+     * inject this struct into the PlayLayer class at runtime.
+     * We keep everything here to avoid static variables (which cause memory leaks).
      */
-    $add(Fields) {
+    struct Fields {
         std::vector<GhostFrame> m_ghostTape;
         size_t m_playbackIndex = 0;
         bool m_isRecording = false;
@@ -40,27 +42,39 @@ class $modify(GhostPlayLayer, PlayLayer) {
         SimplePlayer* m_ghostPlayer = nullptr;
     };
 
-    // --- A. THE DEATH TRAP ---
-    // We hook the death event to signal that the current recording run is corrupted.
+    // --- SECTION 1: CORE HOOKS ---
+
+    // Triggered when the player crashes.
     void destroyPlayer(PlayerObject* p0, GameObject* p1) {
+        log::debug("Ghost: Player death detected. Signaling state: DEAD.");
+        
+        // Mark as dead so we stop recording and preserve the "fail" state
         m_fields->m_hasDied = true;
-        log::debug("Ghost: Player death detected. Stopping tape.");
+        
+        // Pass to the game so the explosion animation plays
         PlayLayer::destroyPlayer(p0, p1);
     }
 
-    // --- B. THE INPUT CAPTURE ---
-    // Manually tracking the hold state so we can replicate the exact movement.
+    // Triggered on every touch/release event.
     void handleButton(bool down, int button, bool isPlayer1) {
         if (isPlayer1) {
+            // Update our internal hold state
             m_fields->m_isHoldingInput = down;
         }
+        
+        // Let the game handle the actual physics
         PlayLayer::handleButton(down, button, isPlayer1);
     }
 
-    // --- C. INITIALIZATION ---
-    // This is the constructor logic for our PlayLayer.
+    // --- SECTION 2: LIFECYCLE ---
+
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
-        if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
+        // Run the original initializer first
+        if (!PlayLayer::init(level, useReplay, dontCheat)) {
+            return false;
+        }
+
+        log::debug("Ghost: Initializing level {}", level->m_levelID);
 
         // Reset all instance state
         m_fields->m_ghostTape.clear();
@@ -68,90 +82,36 @@ class $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_hasDied = false;
         m_fields->m_isRecording = !useReplay;
         
-        // Load data from persistent storage
-        loadFromStorage(level->m_levelID);
+        // Restore previous data if it exists
+        this->loadGhostData(level->m_levelID);
 
-        // Spawn Ghost Player
+        // Spawn visual ghost if the user enabled the mod
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            spawnGhost();
+            this->createGhostPlayer();
         }
 
         return true;
     }
 
-    // --- D. GHOST SPAWNER ---
-    // Instantiates the ghost player visual representation.
-    void spawnGhost() {
-        if (m_fields->m_ghostPlayer) return;
-
-        auto gm = GameManager::sharedState();
-        m_fields->m_ghostPlayer = SimplePlayer::create(gm->getPlayerFrame());
-        
-        if (m_fields->m_ghostPlayer) {
-            m_fields->m_ghostPlayer->setOpacity(130);
-            m_fields->m_ghostPlayer->setColor(cocos2d::ccColor3B{0, 255, 255});
-            m_fields->m_ghostPlayer->setVisible(false);
-            this->m_objectLayer->addChild(m_fields->m_ghostPlayer, 999);
-        }
-    }
-
-    // --- E. PERSISTENCE LAYER: Save ---
-    // Saves the tape data to disk for later viewing.
-    void saveToStorage(int levelID) {
-        std::vector<matjson::Value> arr;
-        for (const auto& frame : m_fields->m_ghostTape) {
-            arr.push_back(matjson::makeObject({
-                {"x", frame.position.x},
-                {"y", frame.position.y},
-                {"rot", frame.rotation},
-                {"hold", frame.isHolding},
-                {"id", frame.iconID}
-            }));
-        }
-        std::string key = "ghost_tape_" + std::to_string(levelID);
-        Mod::get()->setSavedValue(key, matjson::Value(arr));
-        log::debug("Ghost: Saved {} frames.", m_fields->m_ghostTape.size());
-    }
-
-    // --- F. PERSISTENCE LAYER: Load ---
-    // Loads the tape data from disk for playback.
-    void loadFromStorage(int levelID) {
-        std::string key = "ghost_tape_" + std::to_string(levelID);
-        auto data = Mod::get()->getSavedValue<matjson::Value>(key);
-        
-        m_fields->m_ghostTape.clear();
-        if (data.isArray()) {
-            for (auto& item : data.asArray().unwrap()) {
-                m_fields->m_ghostTape.push_back({
-                    {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
-                    (float)item["rot"].asDouble().unwrap(),
-                    item["hold"].asBool().unwrap(),
-                    (int)item["id"].asInt().unwrap(),
-                    (int)IconType::Cube
-                });
-            }
-            log::debug("Ghost: Loaded {} frames.", m_fields->m_ghostTape.size());
-        }
-    }
-
-    // --- G. THE HEARTBEAT ---
-    // This runs every single frame of the game.
+    // Called every frame. The heart of the bot.
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
 
         if (!this->m_player1) return;
 
-        // Recording Phase
+        // --- RECORDING PHASE ---
         if (m_fields->m_isRecording && !m_fields->m_hasDied) {
-            m_fields->m_ghostTape.push_back({
-                this->m_player1->getPosition(),
-                this->m_player1->getRotation(),
-                m_fields->m_isHoldingInput,
-                GameManager::sharedState()->getPlayerFrame(),
-                (int)IconType::Cube
-            });
+            GhostFrame frame;
+            frame.position = this->m_player1->getPosition();
+            frame.rotation = this->m_player1->getRotation();
+            frame.isHolding = m_fields->m_isHoldingInput;
+            frame.iconID = GameManager::sharedState()->getPlayerFrame();
+            frame.iconType = (int)IconType::Cube;
+            
+            m_fields->m_ghostTape.push_back(frame);
         }
-        // Playback Phase
+
+        // --- PLAYBACK PHASE ---
         else if (!m_fields->m_isRecording && !m_fields->m_ghostTape.empty()) {
             if (m_fields->m_playbackIndex < m_fields->m_ghostTape.size()) {
                 auto& frame = m_fields->m_ghostTape[m_fields->m_playbackIndex];
@@ -164,17 +124,19 @@ class $modify(GhostPlayLayer, PlayLayer) {
                 }
                 m_fields->m_playbackIndex++;
             } else {
+                // End of playback
                 if (m_fields->m_ghostPlayer) m_fields->m_ghostPlayer->setVisible(false);
             }
         }
     }
 
-    // --- H. RESET LOGIC ---
-    // Cleans up the state when the player dies or restarts the level.
+    // Reset logic for restarts.
     void resetLevel() {
         PlayLayer::resetLevel();
         
+        // If we died, we might want to clear the recording to start fresh
         if (m_fields->m_hasDied) {
+            log::debug("Ghost: Reset triggered after death. Clearing tape.");
             m_fields->m_ghostTape.clear();
         }
         
@@ -187,19 +149,75 @@ class $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    // --- I. CHECKPOINT HANDLING ---
-    // Ensuring death flag is cleared on respawn from a checkpoint.
-    void loadFromCheckpoint(CheckpointObject* checkpoint) {
-        PlayLayer::loadFromCheckpoint(checkpoint);
-        m_fields->m_hasDied = false;
+    // --- SECTION 3: HELPER METHODS ---
+
+    void createGhostPlayer() {
+        if (m_fields->m_ghostPlayer) return;
+
+        auto gm = GameManager::sharedState();
+        m_fields->m_ghostPlayer = SimplePlayer::create(gm->getPlayerFrame());
+        
+        if (m_fields->m_ghostPlayer) {
+            m_fields->m_ghostPlayer->setOpacity(130);
+            m_fields->m_ghostPlayer->setColor(cocos2d::ccColor3B{0, 255, 255});
+            m_fields->m_ghostPlayer->setVisible(false);
+            this->m_objectLayer->addChild(m_fields->m_ghostPlayer, 999);
+            log::debug("Ghost: Visual instance created.");
+        }
     }
 
-    // --- J. EXIT LOGIC ---
-    // Saves the tape data when exiting the level.
+    void saveGhostData(int levelID) {
+        std::vector<matjson::Value> arr;
+        for (const auto& frame : m_fields->m_ghostTape) {
+            arr.push_back(matjson::makeObject({
+                {"x", frame.position.x},
+                {"y", frame.position.y},
+                {"rot", frame.rotation},
+                {"hold", frame.isHolding},
+                {"id", frame.iconID}
+            }));
+        }
+        std::string key = "ghost_tape_" + std::to_string(levelID);
+        Mod::get()->setSavedValue(key, matjson::Value(arr));
+        log::debug("Ghost: Data saved to disk.");
+    }
+
+    void loadGhostData(int levelID) {
+        std::string key = "ghost_tape_" + std::to_string(levelID);
+        auto data = Mod::get()->getSavedValue<matjson::Value>(key);
+        
+        m_fields->m_ghostTape.clear();
+        
+        if (data.isArray()) {
+            auto arr = data.asArray().unwrap();
+            for (auto& item : arr) {
+                GhostFrame frame;
+                frame.position = {
+                    (float)item["x"].asDouble().unwrap(), 
+                    (float)item["y"].asDouble().unwrap()
+                };
+                frame.rotation = (float)item["rot"].asDouble().unwrap();
+                frame.isHolding = item["hold"].asBool().unwrap();
+                frame.iconID = (int)item["id"].asInt().unwrap();
+                frame.iconType = (int)IconType::Cube;
+                m_fields->m_ghostTape.push_back(frame);
+            }
+            log::debug("Ghost: {} frames loaded.", m_fields->m_ghostTape.size());
+        }
+    }
+
+    // Handle exiting the level (Clean up memory)
     void onExit() {
         if (m_fields->m_isRecording && !m_fields->m_hasDied) {
-            saveToStorage(this->m_level->m_levelID);
+            this->saveGhostData(this->m_level->m_levelID);
         }
+        
+        // Remove ghost from parent to prevent memory leaks
+        if (m_fields->m_ghostPlayer) {
+            m_fields->m_ghostPlayer->removeFromParent();
+            m_fields->m_ghostPlayer = nullptr;
+        }
+        
         PlayLayer::onExit();
     }
 };
