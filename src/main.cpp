@@ -1,16 +1,27 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
 
 using namespace geode::prelude;
 
-class $modify(GhostBotLayer, PlayLayer) {
-    struct Fields {
-        PlayerObject* m_ghostBot = nullptr;
-    };
+// Global tracking pointer to ensure ONLY ONE ghost exists and can be frozen
+static inline PlayerObject* g_ghostBot = nullptr;
 
+class $modify(GhostPlayerObject, PlayerObject) {
+    void update(float dt) {
+        // THE ULTIMATE OVERRIDE: If the engine is trying to update our ghost,
+        // stop it dead in its tracks. Do not run native physics or movement.
+        if (this == g_ghostBot) {
+            return; 
+        }
+        PlayerObject::update(dt);
+    }
+};
+
+class $modify(GhostBotLayer, PlayLayer) {
     bool init(GJGameLevel* level, bool useReplay, bool dontCheat) {
         if (!PlayLayer::init(level, useReplay, dontCheat)) return false;
-        m_fields->m_ghostBot = nullptr;
+        g_ghostBot = nullptr;
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhostBot();
@@ -20,40 +31,41 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void onExit() {
         PlayLayer::onExit();
-        m_fields->m_ghostBot = nullptr;
+        g_ghostBot = nullptr;
     }
 
     void resetLevel() {
-        if (m_fields->m_ghostBot) {
-            m_fields->m_ghostBot->removeFromParent();
-            m_fields->m_ghostBot = nullptr;
+        // Obliterate the ghost object on death/reset to fix the duplicate bugs
+        if (g_ghostBot) {
+            g_ghostBot->removeFromParent();
+            g_ghostBot = nullptr;
         }
 
         PlayLayer::resetLevel();
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
             spawnGhostBot();
-            if (m_fields->m_ghostBot && this->m_player1) {
-                m_fields->m_ghostBot->setPosition(this->m_player1->getPosition());
+            if (g_ghostBot && this->m_player1) {
+                g_ghostBot->setPosition(this->m_player1->getPosition());
             }
         }
     }
 
     void destroyPlayer(PlayerObject* p1, GameObject* p2) {
-        if (m_fields->m_ghostBot && p1 == m_fields->m_ghostBot) return; 
+        if (g_ghostBot && p1 == g_ghostBot) return; 
         PlayLayer::destroyPlayer(p1, p2);
     }
 
     void spawnGhostBot() {
-        if (!m_fields->m_ghostBot && this->m_objectLayer) {
-            // FIXED: Flipped the 5th argument to 'false' to completely kill autonomous gameplay physics
+        // Safeguard: If a ghost already exists, do NOT spawn another one
+        if (!g_ghostBot && this->m_objectLayer) {
             auto ghost = PlayerObject::create(1, 2, nullptr, this->m_objectLayer, false);
             if (ghost) {
-                m_fields->m_ghostBot = ghost;
+                g_ghostBot = ghost;
                 
                 ghost->unscheduleUpdate();
                 
-                // Verified trail removal fields
+                // Nuclear trail deletion
                 if (ghost->m_regularTrail) ghost->m_regularTrail->setVisible(false);
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
@@ -89,9 +101,9 @@ class $modify(GhostBotLayer, PlayLayer) {
         if (this->m_isPaused) return;
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
-            if (!m_fields->m_ghostBot) spawnGhostBot();
+            if (!g_ghostBot) spawnGhostBot();
 
-            auto ghost = m_fields->m_ghostBot;
+            auto ghost = g_ghostBot;
             auto player = this->m_player1;
 
             if (ghost && player) {
@@ -102,16 +114,17 @@ class $modify(GhostBotLayer, PlayLayer) {
                 if (ghost->m_shipStreak) ghost->m_shipStreak->setVisible(false);
                 if (ghost->m_waveTrail) ghost->m_waveTrail->setVisible(false);
 
-                // Lock it firmly down onto our coordinate tracking matrix
+                // With native physics completely dead, our manual coordinate syncing wins!
                 float currentX = player->getPositionX();
                 float currentY = player->getPositionY();
                 
+                // If you want it exactly on top of you, change "+ 60.0f" to "+ 0.0f"
                 ghost->setPosition({currentX + 60.0f, currentY}); 
                 ghost->setRotation(player->getRotation()); 
             }
         } else {
-            if (m_fields->m_ghostBot) {
-                m_fields->m_ghostBot->setVisible(false);
+            if (g_ghostBot) {
+                g_ghostBot->setVisible(false);
             }
         }
     }
