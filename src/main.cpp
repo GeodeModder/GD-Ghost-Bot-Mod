@@ -25,14 +25,14 @@ static inline IconType g_lastGhostType = IconType::Cube;
 // Tuned for your POCO X7 Pro's 120Hz display: 80 frames = ~0.66 seconds look-ahead preview
 constexpr size_t OFFSET_FRAMES = 80; 
 
-// --- Helper Functions ---
+// --- Helper Functions (Fixed Enum Names) ---
 
 // Helper to deduce the active gamemode state from PlayerObject
 IconType getCurrentIconType(PlayerObject* player) {
     if (player->m_isShip) return IconType::Ship;
     if (player->m_isBall) return IconType::Ball;
-    if (player->m_isBird) return IconType::Bird; // UFO
-    if (player->m_isDart) return IconType::Dart; // Wave
+    if (player->m_isBird) return IconType::Ufo;    // Fixed: Changed Bird to Ufo
+    if (player->m_isDart) return IconType::Wave;   // Fixed: Changed Dart to Wave
     if (player->m_isRobot) return IconType::Robot;
     if (player->m_isSpider) return IconType::Spider;
     if (player->m_isSwing) return IconType::Swing;
@@ -46,14 +46,15 @@ int getIconIdForType(IconType type) {
     switch (type) {
         case IconType::Ship:   return gm->getPlayerShip();
         case IconType::Ball:   return gm->getPlayerBall();
-        case IconType::Bird:   return gm->getPlayerBird();
-        case IconType::Dart:   return gm->getPlayerDart();
+        case IconType::Ufo:    return gm->getPlayerBird(); // Fixed: Changed Bird to Ufo
+        case IconType::Wave:   return gm->getPlayerDart(); // Fixed: Changed Dart to Wave
         case IconType::Robot:  return gm->getPlayerRobot();
         case IconType::Spider: return gm->getPlayerSpider();
         case IconType::Swing:  return gm->getPlayerSwing();
         default:               return gm->getPlayerFrame();
     }
 }
+
 
 void spawnGhostBot(PlayLayer* playLayer) {
     if (g_mirrorGhost || !playLayer->m_objectLayer) return;
