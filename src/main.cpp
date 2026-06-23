@@ -23,7 +23,7 @@ static inline IconType g_lastGhostType = IconType::Cube;
 
 constexpr size_t OFFSET_FRAMES = 80;
 
-// --- 2. HELPER FUNCTIONS ---
+// --- 2. HELPERS ---
 void saveGhostData(int levelID) {
     std::vector<matjson::Value> arr;
     for (const auto& frame : g_ghostTape) {
@@ -35,7 +35,6 @@ void saveGhostData(int levelID) {
             {"id", frame.iconID}
         }));
     }
-    // Save with a unique key based on the Level ID
     std::string key = "ghost_tape_" + std::to_string(levelID);
     Mod::get()->setSavedValue(key, matjson::Value(arr));
 }
@@ -44,7 +43,7 @@ void loadGhostData(int levelID) {
     std::string key = "ghost_tape_" + std::to_string(levelID);
     auto data = Mod::get()->getSavedValue<matjson::Value>(key);
     
-    g_ghostTape.clear(); // Always clear before loading
+    g_ghostTape.clear();
     if (data.isArray()) {
         for (auto& item : data.asArray().unwrap()) {
             g_ghostTape.push_back({
@@ -109,7 +108,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
             g_ghostTape.clear();
             g_checkpointTapeMarks.clear();
             g_recordedLevel = level;
-            // Load the specific data for this level ID
             loadGhostData(level->m_levelID);
         }
 
@@ -120,7 +118,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
     }
 
     void onExit() {
-        // Save the specific data for this level ID
         if (g_recordedLevel) {
             saveGhostData(g_recordedLevel->m_levelID);
         }
@@ -142,7 +139,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
-        if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
+        // Recording: Only record if alive. Death frames are ignored.
+        if (this->m_isPracticeMode && this->m_player1 && !this->m_isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             g_ghostTape.push_back({
                 this->m_player1->getPosition(),
@@ -151,6 +149,7 @@ class $modify(GhostPlayLayer, PlayLayer) {
                 getIconIdForType(currentType)
             });
         }
+        // Playback
         else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
             size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
             if (ghostTargetFrame < g_ghostTape.size()) {
@@ -176,18 +175,26 @@ class $modify(GhostPlayLayer, PlayLayer) {
 
     void storeCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::storeCheckpoint(checkpoint);
-        if (this->m_isPracticeMode) g_checkpointTapeMarks.push_back(g_ghostTape.size());
+        if (this->m_isPracticeMode) {
+            g_checkpointTapeMarks.push_back(g_ghostTape.size());
+        }
     }
 
     void loadFromCheckpoint(CheckpointObject* checkpoint) {
         PlayLayer::loadFromCheckpoint(checkpoint);
+        // Clean out the "death run" by reverting to the last checkpoint mark
         if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
-            g_ghostTape.resize(g_checkpointTapeMarks.back());
+            size_t lastMark = g_checkpointTapeMarks.back();
+            if (g_ghostTape.size() > lastMark) {
+                g_ghostTape.resize(lastMark);
+            }
         }
     }
 
     void removeCheckpoint(bool p0) {
         PlayLayer::removeCheckpoint(p0);
-        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) g_checkpointTapeMarks.pop_back();
+        if (this->m_isPracticeMode && !g_checkpointTapeMarks.empty()) {
+            g_checkpointTapeMarks.pop_back();
+        }
     }
 };
