@@ -42,7 +42,7 @@ class $modify(GhostBotLayer, PlayLayer) {
 
     void spawnGhostBot() {
         if (!m_fields->m_ghostBot) {
-            // FIX 1: Changed 5th argument to 'false' so it isn't shackled by Player 2 dual physics
+            // FIX 1: Set 5th argument to false so it handles independent positioning
             auto ghost = PlayerObject::create(1, 2, this, this->m_objectLayer, false);
             if (ghost) {
                 m_fields->m_ghostBot = ghost;
@@ -50,7 +50,6 @@ class $modify(GhostBotLayer, PlayLayer) {
                 ghost->setOpacity(130);
                 ghost->setColor({0, 255, 255});
                 ghost->setVisible(true);
-                ghost->setEnableCollisions(true); 
                 this->addChild(ghost, 999); 
             }
         }
@@ -65,15 +64,15 @@ class $modify(GhostBotLayer, PlayLayer) {
         if (m_fields->m_ghostBot && this->m_player1) {
             m_fields->m_ghostBot->setVisible(true);
             
+            // FIX 2: Added the second required parameter (true) to skip particle/fire effects
             if (m_fields->m_ghostBot->m_isShip != this->m_player1->m_isShip) {
-                m_fields->m_ghostBot->toggleFlyMode(this->m_player1->m_isShip);
+                m_fields->m_ghostBot->toggleFlyMode(this->m_player1->m_isShip, true);
             }
 
-            // FIX 2: Call update() BEFORE setting the position.
-            // This lets the engine do its internal math first, then we forcefully override it.
+            // Run the internal frame tick first
             m_fields->m_ghostBot->update(dt);
 
-            // Now force the scout 60 units ahead cleanly
+            // Force the clean +60.0f translation overhead
             float currentX = this->m_player1->getPositionX();
             float currentY = this->m_player1->getPositionY();
             
