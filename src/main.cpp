@@ -24,7 +24,7 @@ static inline IconType g_lastGhostType = IconType::Cube;
 constexpr size_t OFFSET_FRAMES = 80;
 
 // --- 2. HELPER FUNCTIONS ---
-void saveGhostData() {
+void saveGhostData(int levelID) {
     std::vector<matjson::Value> arr;
     for (const auto& frame : g_ghostTape) {
         arr.push_back(matjson::makeObject({
@@ -35,17 +35,19 @@ void saveGhostData() {
             {"id", frame.iconID}
         }));
     }
-    Mod::get()->setSavedValue("ghost_tape", matjson::Value(arr));
+    // Save with a unique key based on the Level ID
+    std::string key = "ghost_tape_" + std::to_string(levelID);
+    Mod::get()->setSavedValue(key, matjson::Value(arr));
 }
 
-void loadGhostData() {
-    auto data = Mod::get()->getSavedValue<matjson::Value>("ghost_tape");
+void loadGhostData(int levelID) {
+    std::string key = "ghost_tape_" + std::to_string(levelID);
+    auto data = Mod::get()->getSavedValue<matjson::Value>(key);
+    
+    g_ghostTape.clear(); // Always clear before loading
     if (data.isArray()) {
-        g_ghostTape.clear();
-        // .unwrap() is the key here to get the vector out of the Result
         for (auto& item : data.asArray().unwrap()) {
             g_ghostTape.push_back({
-                // .unwrap() extracts the actual value from the Result
                 {(float)item["x"].asDouble().unwrap(), (float)item["y"].asDouble().unwrap()},
                 (float)item["rot"].asDouble().unwrap(),
                 (IconType)item["type"].asInt().unwrap(),
@@ -107,7 +109,8 @@ class $modify(GhostPlayLayer, PlayLayer) {
             g_ghostTape.clear();
             g_checkpointTapeMarks.clear();
             g_recordedLevel = level;
-            loadGhostData();
+            // Load the specific data for this level ID
+            loadGhostData(level->m_levelID);
         }
 
         if (Mod::get()->getSettingValue<bool>("ghost-enabled")) {
@@ -117,7 +120,10 @@ class $modify(GhostPlayLayer, PlayLayer) {
     }
 
     void onExit() {
-        saveGhostData();
+        // Save the specific data for this level ID
+        if (g_recordedLevel) {
+            saveGhostData(g_recordedLevel->m_levelID);
+        }
         PlayLayer::onExit();
     }
 
@@ -136,7 +142,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
         if (!g_mirrorGhost && Mod::get()->getSettingValue<bool>("ghost-enabled")) spawnGhostBot(this);
         if (!g_mirrorGhost) return;
 
-        // Recording Logic
         if (this->m_isPracticeMode && this->m_player1 && !this->m_player1->m_isDead) {
             IconType currentType = getCurrentIconType(this->m_player1);
             g_ghostTape.push_back({
@@ -146,7 +151,6 @@ class $modify(GhostPlayLayer, PlayLayer) {
                 getIconIdForType(currentType)
             });
         }
-        // Playback Logic
         else if (!this->m_isPracticeMode && !g_ghostTape.empty()) {
             size_t ghostTargetFrame = g_liveFrameCounter + OFFSET_FRAMES;
             if (ghostTargetFrame < g_ghostTape.size()) {
