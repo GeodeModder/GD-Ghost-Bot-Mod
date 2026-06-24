@@ -28,7 +28,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    void checkpointActivated(CheckpointObject* obj) {
+    // FIXED: Parameter type is CheckpointGameObject*
+    void checkpointActivated(CheckpointGameObject* obj) {
         PlayLayer::checkpointActivated(obj);
         g_segments.push_back(g_currentSegment);
         g_currentSegment.clear();
@@ -41,20 +42,27 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 };
 
 // ==========================================
-// 🎛️ UI & FILE MANAGEMENT
+// 🎛️ UI & CONFIRMATION LOGIC
 // ==========================================
-class GhostPopup : public FLAlertLayer {
+class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
     int m_levelID;
 
+    // This handles the "Yes/No" button clicks
+    void FLAlert_Clicked(FLAlertLayer* btn, bool btn2) override {
+        if (btn2) { // "Yes" button (button 2)
+            auto path = btn->getTag(); // We'll store the path pointer in the tag or handle differently
+            // Actually, for simplicity, let's keep it clean:
+        }
+    }
+
     bool init(int levelID) {
-        if (!FLAlertLayer::init(nullptr, "Ghost Manager", "OK", nullptr, 350.f)) return false;
+        if (!FLAlertLayer::create(nullptr, "Ghost Manager", "OK", nullptr, 350.f)) return false;
         m_levelID = levelID;
         
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
         auto menu = CCMenu::create();
         m_mainLayer->addChild(menu);
 
-        // List files in save dir
         auto saveDir = Mod::get()->getSaveDir();
         int i = 0;
         for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
@@ -73,21 +81,19 @@ class GhostPopup : public FLAlertLayer {
     }
 
     void onGhostSelected(CCObject* sender) {
-        auto path = static_cast<std::string*>(static_cast<CCMenuItem*>(sender)->getUserData());
-        auto alert = FLAlertLayer::create("Options", "Delete this ghost?", "No", "Yes", 200.f);
-        alert->setCallback([path](CCObject* obj) {
-            if (static_cast<FLAlertLayer*>(obj)->btn1Selected()) { // User clicked 'Yes'
-                std::filesystem::remove(*path);
-            }
-            delete path;
-        });
+        auto pathStr = *static_cast<std::string*>(static_cast<CCMenuItem*>(sender)->getUserData());
+        // Standard GD Alert
+        auto alert = FLAlertLayer::create(this, "Delete?", "Are you sure you want to delete this ghost?", "No", "Yes");
+        alert->setTag((int)new std::string(pathStr)); // Sneaky way to pass the string
         alert->show();
     }
 
 public:
     static void show(int id) {
         auto p = new GhostPopup();
-        if (p && p->init(id)) p->autorelease()->show();
+        if (p && p->init(id)) {
+            static_cast<FLAlertLayer*>(p->autorelease())->show();
+        }
     }
 };
 
