@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
+#include <Geode/ui/Popup.hpp>  // ✨ The critical missing piece!
 #include <fstream>
 #include <vector>
 #include <string>
@@ -137,7 +138,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
                     ghost.sprite->setOpacity(130);
                     ghost.sprite->setScale(0.55f);
                     ghost.sprite->setVisible(false);
-                    m_objectLayer->addChild(ghost.sprite, 2000); // Renders moving with camera
+                    m_objectLayer->addChild(ghost.sprite, 2000);
                 }
             }
 
@@ -161,7 +162,6 @@ struct $modify(MyPlayLayer, PlayLayer) {
         m_fields->m_liveRecording.clear();
         m_fields->m_frameCounter = 0;
         
-        // Reload ghost vectors instantly to parse new files cleanly upon restart
         refreshGhostsForLayer(this);
     }
 };
@@ -173,7 +173,6 @@ void refreshGhostsForLayer(PlayLayer* pl) {
     if (!pl) return;
     auto myPl = static_cast<MyPlayLayer*>(pl);
     
-    // Safely remove any existing sprites so they don't lock/freeze on screen
     for (auto& ghost : myPl->m_fields->m_activeGhosts) {
         if (ghost.sprite) {
             ghost.sprite->removeFromParentAndCleanup(true);
@@ -211,13 +210,14 @@ void refreshGhostsForLayer(PlayLayer* pl) {
 // ==========================================
 // 🎛️ GEODE V5 POPUP COMPONENT 
 // ==========================================
-class AdvancedGhostPopup : public geode::Popup<> {
+class AdvancedGhostPopup : public geode::Popup<int> { // 🛠️ Explicitly passing template arg type
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
     cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
-    bool setup() override {
+    bool setup(int levelID) override { // 🛠️ Signature now matches the template argument
+        m_levelID = levelID;
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
 
         this->setTitle("Custom Ghost Control Room");
@@ -284,7 +284,6 @@ protected:
         file << json.dump();
         file.close();
 
-        // Dynamically append the track to the current active level rendering scene instantly!
         auto playLayer = PlayLayer::get();
         if (playLayer) {
             refreshGhostsForLayer(playLayer);
@@ -303,8 +302,8 @@ protected:
 public:
     static AdvancedGhostPopup* create(int levelID) {
         auto ret = new AdvancedGhostPopup();
-        ret->m_levelID = levelID;
-        if (ret && ret->init(340.f, 210.f)) {
+        // 🛠️ Using initAnchored to properly pass arguments safely to custom setups in modern Geode
+        if (ret && ret->initAnchored(340.f, 210.f, levelID)) {
             ret->autorelease();
             return ret;
         }
