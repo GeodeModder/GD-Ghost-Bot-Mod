@@ -24,46 +24,32 @@ struct CustomGhostProfile {
     std::vector<GhostFrame> frames;
 };
 
+static std::vector<GhostFrame> g_lastAttemptData;
+
+struct LiveGhostTrack {
+    CustomGhostProfile profile;
+    cocos2d::CCSprite* sprite = nullptr;
+    std::string filePath;
+};
+
+// Forward declaration of state synchronizer
+void refreshGhostsForLayer(PlayLayer* pl);
+
 // ==========================================
-// 📦 MATJSON SERIALIZATION (GEODE V5)
+// 📦 SAFE MATJSON SERIALIZATION (GEODE V5)
 // ==========================================
 template <>
 struct matjson::Serialize<GhostFrame> {
     static geode::Result<GhostFrame> fromJson(matjson::Value const& value) {
-        GEODE_UNWRAP_INTO(double x, value["x"].asDouble());
-        GEODE_UNWRAP_INTO(double y, value["y"].asDouble());
-        
-        double rot = 0.0;
-        if (value.contains("rot")) {
-            GEODE_UNWRAP_INTO(rot, value["rot"].asDouble());
-        } else if (value.contains("r")) {
-            GEODE_UNWRAP_INTO(rot, value["r"].asDouble());
-        }
-
-        bool u = false;
-        if (value.contains("u")) {
-            GEODE_UNWRAP_INTO(u, value["u"].asBool());
-        }
-
-        int type = 0;
-        if (value.contains("type")) {
-            GEODE_UNWRAP_INTO(type, value["type"].asInt());
-        }
-
-        int id = 152;
-        if (value.contains("id")) {
-            GEODE_UNWRAP_INTO(id, value["id"].asInt());
-        }
-
-        return geode::Ok(GhostFrame {
-            .position = cocos2d::CCPoint(static_cast<float>(x), static_cast<float>(y)),
-            .rotation = static_cast<float>(rot),
-            .type = type,
-            .id = id,
-            .isUpsideDown = u
-        });
+        GhostFrame frame;
+        if (value.contains("x")) frame.position.x = static_cast<float>(value["x"].asDouble().unwrapOrDefault());
+        if (value.contains("y")) frame.position.y = static_cast<float>(value["y"].asDouble().unwrapOrDefault());
+        if (value.contains("rot")) frame.rotation = static_cast<float>(value["rot"].asDouble().unwrapOrDefault());
+        if (value.contains("u")) frame.isUpsideDown = value["u"].asBool().unwrapOrDefault();
+        if (value.contains("type")) frame.type = value["type"].asInt().unwrapOrDefault();
+        if (value.contains("id")) frame.id = value["id"].asInt().unwrapOrDefault();
+        return geode::Ok(frame);
     }
-    
     static matjson::Value toJson(GhostFrame const& value) {
         auto obj = matjson::Value();
         obj["x"] = static_cast<double>(value.position.x);
@@ -79,13 +65,15 @@ struct matjson::Serialize<GhostFrame> {
 template <>
 struct matjson::Serialize<CustomGhostProfile> {
     static geode::Result<CustomGhostProfile> fromJson(matjson::Value const& value) {
-        GEODE_UNWRAP_INTO(std::string name, value["name"].asString());
-        GEODE_UNWRAP_INTO(int r, value["r"].asInt());
-        GEODE_UNWRAP_INTO(int g, value["g"].asInt());
-        GEODE_UNWRAP_INTO(int b, value["b"].asInt());
-        GEODE_UNWRAP_INTO(std::vector<GhostFrame> frames, value["frames"].as<std::vector<GhostFrame>>());
-
-        return geode::Ok(CustomGhostProfile { name, r, g, b, frames });
+        CustomGhostProfile prof;
+        if (value.contains("name")) prof.name = value["name"].asString().unwrapOrDefault();
+        if (value.contains("r")) prof.r = value["r"].asInt().unwrapOrDefault();
+        if (value.contains("g")) prof.g = value["g"].asInt().unwrapOrDefault();
+        if (value.contains("b")) prof.b = value["b"].asInt().unwrapOrDefault();
+        if (value.contains("frames")) {
+            prof.frames = value["frames"].as<std::vector<GhostFrame>>().unwrapOrDefault();
+        }
+        return geode::Ok(prof);
     }
     static matjson::Value toJson(CustomGhostProfile const& value) {
         auto obj = matjson::Value();
@@ -98,16 +86,8 @@ struct matjson::Serialize<CustomGhostProfile> {
     }
 };
 
-static std::vector<GhostFrame> g_lastAttemptData;
-
-struct LiveGhostTrack {
-    CustomGhostProfile profile;
-    cocos2d::CCSprite* sprite = nullptr;
-    std::string filePath;
-};
-
 // ==========================================
-// 🕹️ PLAYBACK & RECORDING ENGINE
+// 🕹️ PLAYBACK & RECORDING ENGINE HOOKS
 // ==========================================
 struct $modify(MyPlayLayer, PlayLayer) {
     struct Fields {
@@ -124,42 +104,15 @@ struct $modify(MyPlayLayer, PlayLayer) {
         m_fields->m_liveRecording.clear();
         m_fields->m_frameCounter = 0;
         
-        this->assembleActiveGhosts();
+        refreshGhostsForLayer(this);
         return true;
-    }
-
-    void assembleActiveGhosts() {
-        m_fields->m_activeGhosts.clear();
-        auto saveDir = geode::Mod::get()->getSaveDir();
-        std::filesystem::create_directories(saveDir);
-
-        std::string prefix = "ghost_" + std::to_string(m_fields->m_levelID) + "_";
-        for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
-            std::string filename = entry.path().filename().string();
-            if (filename.rfind(prefix, 0) == 0 && filename.substr(filename.find_last_of('.')) == ".json") {
-                try {
-                    std::ifstream file(entry.path());
-                    std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                    auto json = matjson::parse(str);
-                    if (json) {
-                        auto profileRes = json.unwrap().as<CustomGhostProfile>();
-                        if (profileRes) {
-                            LiveGhostTrack track;
-                            track.profile = profileRes.unwrap();
-                            track.filePath = entry.path().string();
-                            track.sprite = nullptr;
-                            m_fields->m_activeGhosts.push_back(track);
-                        }
-                    }
-                } catch(...) {}
-            }
-        }
     }
 
     void update(float dt) {
         PlayLayer::update(dt);
         m_fields->m_frameCounter++;
 
+        // Record live frame
         if (m_player1 && !m_player1->m_isDead) {
             GhostFrame currentFrame {
                 .position = m_player1->getPosition(),
@@ -171,6 +124,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
 
         size_t playbackIndex = static_cast<size_t>(m_fields->m_frameCounter);
 
+        // Process active ghost paths inside game loop
         for (auto& ghost : m_fields->m_activeGhosts) {
             if (!ghost.sprite && m_objectLayer) {
                 ghost.sprite = cocos2d::CCSprite::createWithSpriteFrameName("square02_001.png");
@@ -183,7 +137,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
                     ghost.sprite->setOpacity(130);
                     ghost.sprite->setScale(0.55f);
                     ghost.sprite->setVisible(false);
-                    m_objectLayer->addChild(ghost.sprite, 2000);
+                    m_objectLayer->addChild(ghost.sprite, 2000); // Renders moving with camera
                 }
             }
 
@@ -206,14 +160,56 @@ struct $modify(MyPlayLayer, PlayLayer) {
         PlayLayer::resetLevel();
         m_fields->m_liveRecording.clear();
         m_fields->m_frameCounter = 0;
-        for (auto& ghost : m_fields->m_activeGhosts) {
-            if (ghost.sprite) ghost.sprite->setVisible(false);
-        }
+        
+        // Reload ghost vectors instantly to parse new files cleanly upon restart
+        refreshGhostsForLayer(this);
     }
 };
 
 // ==========================================
-// 🎛️ FIXED GEODE V5 POPUP COMPONENT
+// 🛠️ ACTIVE RUNTIME GRAPHICS SYNCHRONIZER
+// ==========================================
+void refreshGhostsForLayer(PlayLayer* pl) {
+    if (!pl) return;
+    auto myPl = static_cast<MyPlayLayer*>(pl);
+    
+    // Safely remove any existing sprites so they don't lock/freeze on screen
+    for (auto& ghost : myPl->m_fields->m_activeGhosts) {
+        if (ghost.sprite) {
+            ghost.sprite->removeFromParentAndCleanup(true);
+            ghost.sprite = nullptr;
+        }
+    }
+    myPl->m_fields->m_activeGhosts.clear();
+
+    auto saveDir = geode::Mod::get()->getSaveDir();
+    std::filesystem::create_directories(saveDir);
+
+    std::string prefix = "ghost_" + std::to_string(myPl->m_fields->m_levelID) + "_";
+    for (auto const& entry : std::filesystem::directory_iterator(saveDir)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.rfind(prefix, 0) == 0 && filename.substr(filename.find_last_of('.')) == ".json") {
+            try {
+                std::ifstream file(entry.path());
+                std::string str((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                auto json = matjson::parse(str);
+                if (json) {
+                    auto profileRes = json.unwrap().as<CustomGhostProfile>();
+                    if (profileRes) {
+                        LiveGhostTrack track;
+                        track.profile = profileRes.unwrap();
+                        track.filePath = entry.path().string();
+                        track.sprite = nullptr;
+                        myPl->m_fields->m_activeGhosts.push_back(track);
+                    }
+                }
+            } catch(...) {}
+        }
+    }
+}
+
+// ==========================================
+// 🎛️ GEODE V5 POPUP COMPONENT 
 // ==========================================
 class AdvancedGhostPopup : public geode::Popup<> {
 protected:
@@ -221,32 +217,27 @@ protected:
     CCTextInputNode* m_inputField = nullptr;
     cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
-    // Fixed signature: Geode v5 setup takes zero arguments 
     bool setup() override {
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
 
         this->setTitle("Custom Ghost Control Room");
 
-        // Explicit coordinate-safe input menu
         auto menu = cocos2d::CCMenu::create();
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
-        // Text Input Field Setup
         m_inputField = CCTextInputNode::create(180.f, 30.f, "Name your ghost...", "bigFont.fnt");
         m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 32.f});
         m_inputField->setAllowedChars("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ");
         m_inputField->setMaxLabelLength(16);
         m_mainLayer->addChild(m_inputField);
 
-        // Run Status Label
         std::string statStr = g_lastAttemptData.empty() ? "No run data cached." : "Cached Run: " + std::to_string(g_lastAttemptData.size()) + " frames";
         m_statusLabel = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
         m_statusLabel->setScale(0.35f);
         m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 2.f});
         m_mainLayer->addChild(m_statusLabel);
 
-        // Color Button Positions
         float startX = winSize.width / 2 - 100.f;
         float spacing = 50.f;
         float yPos = winSize.height / 2 - 38.f;
@@ -293,7 +284,13 @@ protected:
         file << json.dump();
         file.close();
 
-        FLAlertLayer::create("Saved!", "'" + ghostName + "' is ready to race! Restart level to apply.", "OK")->show();
+        // Dynamically append the track to the current active level rendering scene instantly!
+        auto playLayer = PlayLayer::get();
+        if (playLayer) {
+            refreshGhostsForLayer(playLayer);
+        }
+
+        FLAlertLayer::create("Saved!", "'" + ghostName + "' is ready! Unpause to race.", "OK")->show();
         this->onClose(nullptr);
     }
 
@@ -307,7 +304,6 @@ public:
     static AdvancedGhostPopup* create(int levelID) {
         auto ret = new AdvancedGhostPopup();
         ret->m_levelID = levelID;
-        // Geode v5 initialization style
         if (ret && ret->init(340.f, 210.f)) {
             ret->autorelease();
             return ret;
