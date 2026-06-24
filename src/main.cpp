@@ -1,6 +1,7 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
+#include <Geode/ui/Popup.hpp> // 💡 FIX: Added missing popup UI framework header
 #include <fstream>
 #include <vector>
 #include <string>
@@ -199,7 +200,7 @@ struct $modify(MyPlayLayer, PlayLayer) {
 // ==========================================
 // 🎛️ UI: PAUSE MENU CONTROL CONSOLE
 // ==========================================
-class AdvancedGhostPopup : public Popup<int>, public TextInputDelegate {
+class AdvancedGhostPopup : public geode::Popup<int>, public TextInputDelegate {
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
@@ -230,36 +231,37 @@ protected:
         m_mainLayer->addChild(m_statusLabel);
 
         // --- 🎨 THE MULTI-COLOR BUTTON ROW ---
+        // 💡 FIX: Added required font param to correctly match Geode ButtonSprite::create methods
         float startX = winSize.width / 2 - 100.f;
         float spacing = 50.f;
         float yPos = winSize.height / 2 - 35.f;
 
         // 1. Cyan Button
-        auto cBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("CYN", "GJ_button_01.png"), this, menu_selector(AdvancedGhostPopup::onCyan));
+        auto cBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("CYN", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(AdvancedGhostPopup::onCyan));
         cBtn->setPosition({startX + (0 * spacing), yPos});
         cBtn->setScale(0.7f);
         menu->addChild(cBtn);
 
         // 2. Gold Button
-        auto gBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GLD", "goldButton_001.png"), this, menu_selector(AdvancedGhostPopup::onGold));
+        auto gBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GLD", "goldFont.fnt", "goldButton_001.png"), this, menu_selector(AdvancedGhostPopup::onGold));
         gBtn->setPosition({startX + (1 * spacing), yPos});
         gBtn->setScale(0.7f);
         menu->addChild(gBtn);
 
         // 3. Red Button
-        auto rBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("RED", "GJ_button_06.png"), this, menu_selector(AdvancedGhostPopup::onRed));
+        auto rBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("RED", "goldFont.fnt", "GJ_button_06.png"), this, menu_selector(AdvancedGhostPopup::onRed));
         rBtn->setPosition({startX + (2 * spacing), yPos});
         rBtn->setScale(0.7f);
         menu->addChild(rBtn);
 
         // 4. Green Button
-        auto grBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GRN", "GJ_button_02.png"), this, menu_selector(AdvancedGhostPopup::onGreen));
+        auto grBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("GRN", "goldFont.fnt", "GJ_button_02.png"), this, menu_selector(AdvancedGhostPopup::onGreen));
         grBtn->setPosition({startX + (3 * spacing), yPos});
         grBtn->setScale(0.7f);
         menu->addChild(grBtn);
 
         // 5. Purple Button
-        auto pBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("PRP", "GJ_button_04.png"), this, menu_selector(AdvancedGhostPopup::onPurple));
+        auto pBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("PRP", "goldFont.fnt", "GJ_button_04.png"), this, menu_selector(AdvancedGhostPopup::onPurple));
         pBtn->setPosition({startX + (4 * spacing), yPos});
         pBtn->setScale(0.7f);
         menu->addChild(pBtn);
