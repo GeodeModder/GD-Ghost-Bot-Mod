@@ -1,7 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <Geode/ui/Popup.hpp> // 💡 FIX: Added missing popup UI framework header
 #include <fstream>
 #include <vector>
 #include <string>
@@ -198,19 +197,43 @@ struct $modify(MyPlayLayer, PlayLayer) {
 };
 
 // ==========================================
-// 🎛️ UI: PAUSE MENU CONTROL CONSOLE
+// 🎛️ UI: NATIVE GD PAUSE CONTROL CONSOLE
 // ==========================================
-class AdvancedGhostPopup : public geode::Popup<int>, public TextInputDelegate {
+// 💡 FIXED: Inheriting from FLAlertLayer directly fixes all template and conversion errors!
+class AdvancedGhostPopup : public FLAlertLayer, public TextInputDelegate {
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
     cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
-    bool setup(int levelID) override {
-        m_levelID = levelID;
-        this->setTitle("Custom Ghost Control Room");
+    bool init(int levelID) {
+        // Initialize native popup dark overlay background tint
+        if (!FLAlertLayer::init(150)) return false;
 
+        m_levelID = levelID;
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
+        
+        // Base Panel Plate Setup
+        auto bg = cocos2d::CCSprite::createWithSpriteFrameName("GJ_square01.png");
+        if (bg) {
+            bg->setPosition(winSize / 2);
+            bg->setScaleX(290.f / bg->getContentSize().width);
+            bg->setScaleY(170.f / bg->getContentSize().height);
+            m_mainLayer->addChild(bg);
+        }
+
+        // Close Controller Button Setup
+        auto closeSprite = cocos2d::CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png");
+        auto closeBtn = CCMenuItemSpriteExtra::create(closeSprite, this, menu_selector(AdvancedGhostPopup::onClose));
+        auto closeMenu = cocos2d::CCMenu::create(closeBtn);
+        closeMenu->setPosition({winSize.width / 2 - 145.f + 18.f, winSize.height / 2 + 85.f - 18.f});
+        m_mainLayer->addChild(closeMenu);
+
+        // Core Dialogue Header
+        auto title = cocos2d::CCLabelBMFont::create("Custom Ghost Control Room", "goldFont.fnt");
+        title->setPosition({winSize.width / 2, winSize.height / 2 + 62.f});
+        title->setScale(0.65f);
+        m_mainLayer->addChild(title);
         
         auto menu = cocos2d::CCMenu::create();
         menu->setPosition({0, 0});
@@ -218,23 +241,23 @@ protected:
 
         // Naming Field Setup
         m_inputField = CCTextInputNode::create(180.f, 30.f, "Name your ghost...", "bigFont.fnt");
-        m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 35});
+        m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 30.f});
         m_inputField->setAllowedChars("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ");
         m_inputField->setMaxLabelLength(16);
+        m_inputField->setDelegate(this);
         m_mainLayer->addChild(m_inputField);
 
         // Frame Status Label
         std::string statStr = g_lastAttemptData.empty() ? "No run data cached." : "Cached Run: " + std::to_string(g_lastAttemptData.size()) + " frames";
         m_statusLabel = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
         m_statusLabel->setScale(0.35f);
-        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 5});
+        m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 0.f});
         m_mainLayer->addChild(m_statusLabel);
 
         // --- 🎨 THE MULTI-COLOR BUTTON ROW ---
-        // 💡 FIX: Added required font param to correctly match Geode ButtonSprite::create methods
         float startX = winSize.width / 2 - 100.f;
         float spacing = 50.f;
-        float yPos = winSize.height / 2 - 35.f;
+        float yPos = winSize.height / 2 - 38.f;
 
         // 1. Cyan Button
         auto cBtn = CCMenuItemSpriteExtra::create(ButtonSprite::create("CYN", "goldFont.fnt", "GJ_button_01.png"), this, menu_selector(AdvancedGhostPopup::onCyan));
@@ -266,7 +289,15 @@ protected:
         pBtn->setScale(0.7f);
         menu->addChild(pBtn);
 
+        this->setTouchEnabled(true);
+        this->setKeypadEnabled(true);
+
         return true;
+    }
+
+    void onClose(cocos2d::CCObject*) {
+        this->setTouchEnabled(false);
+        this->removeFromParentAndCleanup(true);
     }
 
     void saveWithColor(int r, int g, int b) {
@@ -301,7 +332,7 @@ protected:
 public:
     static AdvancedGhostPopup* create(int levelID) {
         auto ret = new AdvancedGhostPopup();
-        if (ret && ret->initAnchored(290.f, 170.f, levelID)) {
+        if (ret && ret->init(levelID)) {
             ret->autorelease();
             return ret;
         }
@@ -330,7 +361,6 @@ struct $modify(MyPauseLayer, PauseLayer) {
         if (playLayer) {
             auto myPlayLayer = static_cast<MyPlayLayer*>(playLayer);
             
-            // UX Feature: If player pauses MID-RUN, immediately clone current active path data!
             if (!myPlayLayer->m_fields->m_liveRecording.empty()) {
                 g_lastAttemptData = myPlayLayer->m_fields->m_liveRecording;
             }
