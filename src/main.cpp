@@ -1,7 +1,6 @@
 #include <Geode/Geode.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PauseLayer.hpp>
-#include <Geode/ui/Popup.hpp>  // ✨ The critical missing piece!
 #include <fstream>
 #include <vector>
 #include <string>
@@ -208,36 +207,59 @@ void refreshGhostsForLayer(PlayLayer* pl) {
 }
 
 // ==========================================
-// 🎛️ GEODE V5 POPUP COMPONENT 
+// 🎛️ BULLETPROOF CUSTOM POPUP COMPONENT (FLAlertLayer)
 // ==========================================
-class AdvancedGhostPopup : public geode::Popup<int> { // 🛠️ Explicitly passing template arg type
+class AdvancedGhostPopup : public FLAlertLayer {
 protected:
     int m_levelID;
     CCTextInputNode* m_inputField = nullptr;
     cocos2d::CCLabelBMFont* m_statusLabel = nullptr;
 
-    bool setup(int levelID) override { // 🛠️ Signature now matches the template argument
+    bool init(int levelID) {
+        // Initialize FLAlertLayer with a standard dark background opacity
+        if (!FLAlertLayer::init(150)) return false;
+
         m_levelID = levelID;
         auto winSize = cocos2d::CCDirector::sharedDirector()->getWinSize();
 
-        this->setTitle("Custom Ghost Control Room");
+        // 1. Base Layer Background Box
+        auto bg = cocos2d::extension::CCScale9Sprite::create("GJ_square01.png");
+        bg->setContentSize({340.f, 210.f});
+        bg->setPosition(winSize / 2);
+        m_mainLayer->addChild(bg);
 
+        // 2. Title Text
+        auto title = cocos2d::CCLabelBMFont::create("Custom Ghost Control Room", "goldFont.fnt");
+        title->setPosition({winSize.width / 2, winSize.height / 2 + 82.f});
+        title->setScale(0.7f);
+        m_mainLayer->addChild(title);
+
+        // 3. Action Control Menu
         auto menu = cocos2d::CCMenu::create();
         menu->setPosition({0, 0});
         m_mainLayer->addChild(menu);
 
+        // 4. Close Button
+        auto closeSprite = cocos2d::CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png");
+        auto closeBtn = CCMenuItemSpriteExtra::create(closeSprite, this, menu_selector(AdvancedGhostPopup::onCloseBtn));
+        closeBtn->setPosition({winSize.width / 2 - 155.f, winSize.height / 2 + 90.f});
+        menu->addChild(closeBtn);
+
+        // 5. Input Text Field
         m_inputField = CCTextInputNode::create(180.f, 30.f, "Name your ghost...", "bigFont.fnt");
         m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 32.f});
         m_inputField->setAllowedChars("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ");
         m_inputField->setMaxLabelLength(16);
         m_mainLayer->addChild(m_inputField);
 
+        // 6. Active Frame Cache Status Label
         std::string statStr = g_lastAttemptData.empty() ? "No run data cached." : "Cached Run: " + std::to_string(g_lastAttemptData.size()) + " frames";
         m_statusLabel = cocos2d::CCLabelBMFont::create(statStr.c_str(), "goldFont.fnt");
         m_statusLabel->setScale(0.35f);
         m_statusLabel->setPosition({winSize.width / 2, winSize.height / 2 + 2.f});
         m_mainLayer->addChild(m_statusLabel);
 
+        // 7. Color Assignment Buttons Layout
         float startX = winSize.width / 2 - 100.f;
         float spacing = 50.f;
         float yPos = winSize.height / 2 - 38.f;
@@ -262,6 +284,7 @@ protected:
         pBtn->setPosition({startX + (4 * spacing), yPos}); pBtn->setScale(0.7f);
         menu->addChild(pBtn);
 
+        this->setKeypadEnabled(true);
         return true;
     }
 
@@ -290,7 +313,16 @@ protected:
         }
 
         FLAlertLayer::create("Saved!", "'" + ghostName + "' is ready! Unpause to race.", "OK")->show();
-        this->onClose(nullptr);
+        onCloseBtn(nullptr);
+    }
+
+    void onCloseBtn(cocos2d::CCObject*) {
+        this->setKeypadEnabled(false);
+        this->removeFromParentAndCleanup(true);
+    }
+
+    void keyBackClicked() override {
+        onCloseBtn(nullptr);
     }
 
     void onCyan(cocos2d::CCObject*) { saveWithColor(0, 255, 255); }
@@ -302,8 +334,7 @@ protected:
 public:
     static AdvancedGhostPopup* create(int levelID) {
         auto ret = new AdvancedGhostPopup();
-        // 🛠️ Using initAnchored to properly pass arguments safely to custom setups in modern Geode
-        if (ret && ret->initAnchored(340.f, 210.f, levelID)) {
+        if (ret && ret->init(levelID)) {
             ret->autorelease();
             return ret;
         }
