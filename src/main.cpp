@@ -9,7 +9,7 @@
 #include <string>
 #include <algorithm>
 #include <unordered_map>
-#include <chrono> // 🔒 Safe fallback for cross-platform timestamping
+#include <chrono> 
 
 using namespace geode::prelude;
 
@@ -25,7 +25,7 @@ struct RuntimeGhost {
     std::string name;
     ccColor3B color;
     bool isEnabled;
-    std::string filename; // 🔒 Permanent Unique ID Token
+    std::string filename; 
     uint32_t lookAheadTicks = 0; 
     std::vector<GhostFrame> frames;
 };
@@ -78,7 +78,6 @@ public:
         return uniqueName;
     }
 
-    // ⚡ Safe Modern Synchronous matjson Serializer 
     void saveMetadataFile(int levelID) {
         auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
         std::filesystem::create_directories(dir);
@@ -328,7 +327,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        // 🛠️ FIXED: Swapped to Geode 5.x standard m_isPracticeMode variable
         if (GhostManager::get()->isRecording() && m_isPracticeMode) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
@@ -406,7 +404,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 
     void playEndAnimationToPos(cocos2d::CCPoint pos) {
         PlayLayer::playEndAnimationToPos(pos);
-        // 🛠️ FIXED: Swapped to standard m_isPracticeMode
         if (m_isPracticeMode) this->executeUnifiedSaveFlow();
     }
 
@@ -420,9 +417,9 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_checkpointTicks.push_back(m_fields->m_physicsTicks);
     }
 
-    void removeLastCheckpoint() {
-        // 🛠️ FIXED: Checkpoint storage hooks called via GJBaseGameLayer parent logic in 2.2
-        GJBaseGameLayer::removeLastCheckpoint();
+    void removeCheckpoint(bool first) {
+        // 🛠️ FIXED: Overrode the proper 2.2 standard hook name and call routing
+        PlayLayer::removeCheckpoint(first);
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
 };
@@ -437,7 +434,6 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
     std::filesystem::create_directories(dir);
 
-    // 🛠️ FIXED: Swapped geode::utils::time out for standard library high-precision chrono clock parameters
     auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
@@ -496,7 +492,6 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
     }
-    // 🛠️ FIXED: Dismiss panel via standard Cocos alert virtual sequence
     this->keyBackClicked();
 }
 
@@ -521,4 +516,14 @@ public:
     }
 
     bool init() override {
-        if (!FLAlertLayer::ini
+        // 🛠️ FIXED: Fully written initialization method block
+        if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
+
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+        m_listMenu = CCMenu::create();
+        m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
+        m_mainLayer->addChild(m_listMenu);
+
+        this->refreshGhostListUI();
+
+        auto bottomMenu = CCMenu::create
