@@ -418,7 +418,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 
     void removeCheckpoint(bool first) {
-        // 🛠️ FIXED: Overrode the proper 2.2 standard hook name and call routing
         PlayLayer::removeCheckpoint(first);
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
@@ -515,15 +514,16 @@ public:
         return nullptr;
     }
 
-    bool init() override {
-        // 🛠️ FIXED: Fully written initialization method block
-        if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
+    void refreshGhostListUI() {
+        m_listMenu->removeAllChildrenWithCleanup(true);
+        float yOffset = 60.f;
 
-        auto winSize = CCDirector::sharedDirector()->getWinSize();
-        m_listMenu = CCMenu::create();
-        m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
-        m_mainLayer->addChild(m_listMenu);
+        auto& ghosts = GhostManager::get()->getActiveGhosts();
+        for (size_t i = 0; i < ghosts.size(); ++i) {
+            auto& ghost = ghosts[i];
 
-        this->refreshGhostListUI();
-
-        auto bottomMenu = CCMenu::create
+            auto colorSprite = CCSprite::createWithSpriteFrameName("GJ_colorBtn_001.png");
+            colorSprite->setColor(ghost.color);
+            colorSprite->setScale(0.6f);
+            auto colBtn = CCMenuItemSpriteExtra::create(this, menu_selector(GhostPopup::onSelectColorPalette));
+            colBtn->setNormalImage(color
