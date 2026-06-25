@@ -634,7 +634,8 @@ public:
         m_colorEditIdx = idx;
         
         auto popup = ColorPickPopup::create(ghosts[idx].color);
-        popup->setColorCallback([this](cocos2d::ccColor4B color) {
+        // FIX: The method name is setCallback, not setColorCallback
+        popup->setCallback([this](cocos2d::ccColor4B color) {
             this->updateColorValue({color.r, color.g, color.b});
         });
         popup->show();
