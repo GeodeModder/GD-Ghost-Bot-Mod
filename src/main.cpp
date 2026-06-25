@@ -176,6 +176,7 @@ public:
         }
     }
 };
+
 // ==========================================
 // 💬 DIALOG INTERFACE POPUPS
 // ==========================================
@@ -236,9 +237,11 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     };
 
     SimplePlayer* createGhostSprite(ccColor3B routeColor) {
+        auto ghostSprite = SimplePlayer::create(0);
         auto playerFrame = GameManager::sharedState()->getPlayerFrame();
-        auto ghostSprite = SimplePlayer::create(playerFrame);
+        
         if (ghostSprite) {
+            ghostSprite->updatePlayerFrame(playerFrame);
             ghostSprite->setColor(routeColor);
             ghostSprite->setSecondColor(GameManager::sharedState()->colorForIdx(GameManager::sharedState()->getPlayerColor2()));
             ghostSprite->setOpacity(130);
@@ -288,141 +291,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 
     bool init(GJGameLevel* level, bool usePractice, bool isPlatformer) {
-        if (!PlayLayer::init(level, usePractice, isPlatformer)) return false;
-
-        m_fields->m_checkpointTicks.clear();
-        m_fields->m_physicsTicks = 0;
-        m_fields->m_wasDeadLastFrame = false;
-        m_fields->m_saveFlowTriggered = false; 
-
-        GhostManager::get()->loadMacroFramework(level->m_levelID);
-        initializeRenderPool();
-        return true;
-    }
-
-    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
-        PlayLayer::processCommands(dt, isHalfTick, isLastTick);
-        if (!m_player1) return;
-
-        if (m_player1->m_isDead) {
-            m_fields->m_wasDeadLastFrame = true;
-            return;
-        }
-
-        if (m_fields->m_wasDeadLastFrame && !m_player1->m_isDead) {
-            m_fields->m_wasDeadLastFrame = false;
-            if (!m_fields->m_checkpointTicks.empty()) {
-                m_fields->m_physicsTicks = m_fields->m_checkpointTicks.back(); 
-                
-                if (GhostManager::get()->isRecording()) {
-                    auto& buffer = GhostManager::get()->getRecordingBuffer();
-                    buffer.erase(std::remove_if(buffer.begin(), buffer.end(), [this](GhostFrame const& f) {
-                        return f.tick > m_fields->m_physicsTicks;
-                    }), buffer.end());
-                }
-            } else {
-                m_fields->m_physicsTicks = 0;
-                if (GhostManager::get()->isRecording()) GhostManager::get()->getRecordingBuffer().clear();
-            }
-        }
-
-        // Logic check: ensure recording continues even if leaving practice temporarily, 
-        // but here we maintain the existing logic you had.
-        if (GhostManager::get()->isRecording()) {
-            GhostManager::get()->getRecordingBuffer().push_back({
-                m_fields->m_physicsTicks,
-                m_player1->getPositionX(),
-                m_player1->getPositionY(),
-                m_player1->getRotation()
-            });
-        }
-
-        m_fields->m_physicsTicks++;
-    }
-
-    void update(float dt) {
-        PlayLayer::update(dt);
-        if (!m_player1 || m_player1->m_isDead) return;
-
-        auto& routes = GhostManager::get()->getActiveGhosts();
-        for (auto const& ghostData : routes) {
-            if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
-
-            auto it = m_fields->m_ghostSprites.find(ghostData.filename);
-            if (it == m_fields->m_ghostSprites.end() || !it->second) continue;
-            auto ghostSprite = it->second;
-
-            uint32_t targetTick = m_fields->m_physicsTicks + ghostData.lookAheadTicks;
-            
-            auto itb = std::lower_bound(ghostData.frames.begin(), ghostData.frames.end(), targetTick, [](GhostFrame const& frame, uint32_t target) {
-                return frame.tick < target;
-            });
-
-            if (itb != ghostData.frames.end() && itb != ghostData.frames.begin()) {
-                auto ita = itb - 1;
-                
-                float tickDelta = static_cast<float>(itb->tick - ita->tick);
-                float pct = (tickDelta > 0.f) ? static_cast<float>(targetTick - ita->tick) / tickDelta : 0.f;
-
-                float lerpedX = ita->x + pct * (itb->x - ita->x);
-                float lerpedY = ita->y + pct * (itb->y - ita->y);
-
-                float diff = itb->rot - ita->rot;
-                while (diff < -180.f) diff += 360.f;
-                while (diff > 180.f) diff -= 360.f;
-                float lerpedRot = ita->rot + pct * diff;
-
-                ghostSprite->setVisible(true);
-                ghostSprite->setPosition({lerpedX, lerpedY});
-                ghostSprite->setRotation(lerpedRot);
-            } else if (itb == ghostData.frames.end() && !ghostData.frames.empty()) {
-                auto const& lastFrame = ghostData.frames.back();
-                ghostSprite->setVisible(true);
-                ghostSprite->setPosition({lastFrame.x, lastFrame.y});
-                ghostSprite->setRotation(lastFrame.rot);
-            } else {
-                ghostSprite->setVisible(false);
-            }
-        }
-    }
-
-    void registerDynamicRecordSprite(std::string const& filename, ccColor3B color) {
-        auto sprite = createGhostSprite(color);
-        if (sprite) {
-            sprite->setVisible(true);
-            m_fields->m_ghostSprites[filename] = sprite;
-        }
-    }
-
-    void executeUnifiedSaveFlow() {
-        if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
-            m_fields->m_saveFlowTriggered = true; 
-            // Don't call clearVolatileBuffers() here yet! Let the Dialog handle it.
-            auto popup = GhostNameDialog::create(m_level->m_levelID, false);
-            if (popup) popup->show();
-        }
-    }
-
-    void playEndAnimationToPos(cocos2d::CCPoint pos) {
-        PlayLayer::playEndAnimationToPos(pos);
-        this->executeUnifiedSaveFlow();
-    }
-
-    void levelComplete() {
-        PlayLayer::levelComplete();
-        this->executeUnifiedSaveFlow();
-    }
-
-    void createCheckpoint() {
-        PlayLayer::createCheckpoint();
-        m_fields->m_checkpointTicks.push_back(m_fields->m_physicsTicks);
-    }
-
-    void removeCheckpoint(bool first) {
-        PlayLayer::removeCheckpoint(first);
-        if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
-    }
-};
+        if (!PlayLayer::init(level, usePractice, is
 // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
@@ -491,8 +360,6 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
     } else {
-        // If they hit cancel, we still want to stop recording but maybe keep the buffer? 
-        // For now, clean up so they can try again.
         GhostManager::get()->clearVolatileBuffers();
     }
     this->keyBackClicked();
@@ -533,7 +400,7 @@ public:
     }
 
     void refreshGhostListUI() {
-        if (!m_listMenu) return; // FIX 2: Prevent null crash
+        if (!m_listMenu) return; 
         m_listMenu->removeAllChildrenWithCleanup(true);
         float yOffset = 60.f;
 
@@ -588,22 +455,26 @@ public:
     bool init() override {
         if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
 
+        log::info("GhostPopup: init start");
+
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         m_listMenu = CCMenu::create();
         m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
         m_mainLayer->addChild(m_listMenu);
 
-        this->refreshGhostListUI();
+        // Temporarily disabled via comments to isolate list item crashes
+        // this->refreshGhostListUI();
 
         auto bottomMenu = CCMenu::create();
         bottomMenu->setPosition({winSize.width / 2, winSize.height / 2 - 95.f});
         m_mainLayer->addChild(bottomMenu);
 
-        auto recBtnSprite = ButtonSprite::create("🔴 Record New Route", "goldFont.fnt", "GJ_button_01.png");
+        auto recBtnSprite = ButtonSprite::create("Record New Route", "goldFont.fnt", "GJ_button_01.png");
         
         auto recBtn = CCMenuItemSpriteExtra::create(recBtnSprite, this, menu_selector(GhostPopup::onInitiateRecordAction));
         bottomMenu->addChild(recBtn);
 
+        log::info("GhostPopup: init complete");
         return true;
     }
 
@@ -613,7 +484,6 @@ public:
         auto& ghosts = GhostManager::get()->getActiveGhosts();
         if (idx >= ghosts.size()) return;
 
-        // FIX 3: Assign directly to toggled state (no logical inversion needed now)
         ghosts[idx].isEnabled = toggler->isToggled(); 
         GhostManager::get()->saveMetadataFile(m_levelID);
 
@@ -694,8 +564,7 @@ struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
         
-        // FIX 1: Use typeinfo_cast to be safe!
-        auto menu = typeinfo_cast<CCMenu*>(this->getChildByID("right-button-menu"));
+        auto menu = this->getChildByType<CCMenu>(0); 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
         if (menu) {
@@ -711,17 +580,19 @@ struct $modify(MyPauseLayer, PauseLayer) {
             manualSaveMenu->setPosition({winSize.width / 2, winSize.height / 2 + 55.f});
             this->addChild(manualSaveMenu, 1000);
 
-            auto saveBtnSprite = ButtonSprite::create("🟢 Finish & Save Route", "goldFont.fnt", "GJ_button_02.png");
+            auto saveBtnSprite = ButtonSprite::create("Finish & Save Route", "goldFont.fnt", "GJ_button_02.png");
             
             auto saveBtn = CCMenuItemSpriteExtra::create(saveBtnSprite, this, menu_selector(MyPauseLayer::onManualSaveOverrideAction));
             manualSaveMenu->addChild(saveBtn);
         }
     }
 
+    // ISOLATION TRIGGER: Swapped to an direct message toast to verify button connectivity instantly
     void onOpenGhostConfigPanel(CCObject*) {
-        if (auto pl = PlayLayer::get()) {
-            GhostPopup::open(pl->m_level->m_levelID);
-        }
+        Notification::create(
+            "Button callback works", 
+            NotificationIcon::Success
+        )->show();
     }
 
     void onManualSaveOverrideAction(CCObject*) {
