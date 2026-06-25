@@ -550,7 +550,6 @@ public:
                 m_listMenu->addChild(colBtn);
             }
 
-            // FIXED: Using concrete texture wrappers instead of unstable standard macro toggles
             auto onSprite = CCSprite::createWithSpriteFrameName("GJ_checkOnBtn_001.png");
             auto offSprite = CCSprite::createWithSpriteFrameName("GJ_checkOffBtn_001.png");
             if (onSprite && offSprite) {
@@ -595,7 +594,6 @@ public:
     }
 
     bool init() override {
-        // FIXED: Repositioned parameters so "Close" acts as a solid button entity natively
         if (!FLAlertLayer::init(this, "Ghost Manager", "", "Close", nullptr, 380.f, false, 250.f, 1.f)) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
@@ -603,7 +601,6 @@ public:
         m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
         m_mainLayer->addChild(m_listMenu);
 
-        // UNCOMMENTED: The list UI is officially active and armed!
         this->refreshGhostListUI();
 
         auto bottomMenu = CCMenu::create();
@@ -619,13 +616,20 @@ public:
         return true;
     }
 
+    // CHATGPT DIAGNOSTIC: Testing if button interaction functions at all
+    void onInitiateRecordAction(CCObject*) {
+        Notification::create(
+            "Record button pressed!",
+            NotificationIcon::Success
+        )->show();
+    }
+
     void onToggleGhostVisibility(CCObject* sender) {
         auto toggler = static_cast<CCMenuItemToggler*>(sender);
         size_t idx = static_cast<size_t>(toggler->getTag());
         auto& ghosts = GhostManager::get()->getActiveGhosts();
         if (idx >= ghosts.size()) return;
 
-        // Invert current state safely
         ghosts[idx].isEnabled = !ghosts[idx].isEnabled; 
         GhostManager::get()->saveMetadataFile(m_levelID);
 
@@ -633,16 +637,6 @@ public:
             pl->updateGhostVisibility(ghosts[idx].filename, ghosts[idx].isEnabled);
         }
         this->refreshGhostListUI();
-    }
-
-    void onInitiateRecordAction(CCObject*) {
-        GhostManager::get()->setRecording(true);
-        GhostManager::get()->getRecordingBuffer().clear();
-
-        if (auto pl = PlayLayer::get()) {
-            pl->resetLevel();
-            this->keyBackClicked();
-        }
     }
 
     void onSelectColorPalette(CCObject* sender) {
@@ -710,9 +704,7 @@ struct $modify(MyPauseLayer, PauseLayer) {
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
         if (menu) {
-            // FIXED: Cleaned up hallucinated asset delegate class
             auto managerBtnSprite = CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png");
-            
             if (managerBtnSprite) {
                 auto managerBtn = CCMenuItemSpriteExtra::create(managerBtnSprite, this, menu_selector(MyPauseLayer::onOpenGhostConfigPanel));
                 menu->addChild(managerBtn);
@@ -726,7 +718,6 @@ struct $modify(MyPauseLayer, PauseLayer) {
             this->addChild(manualSaveMenu, 1000);
 
             auto saveBtnSprite = ButtonSprite::create("Finish & Save Route", "goldFont.fnt", "GJ_button_02.png");
-            
             if (saveBtnSprite) {
                 auto saveBtn = CCMenuItemSpriteExtra::create(saveBtnSprite, this, menu_selector(MyPauseLayer::onManualSaveOverrideAction));
                 manualSaveMenu->addChild(saveBtn);
