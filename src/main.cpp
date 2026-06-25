@@ -424,7 +424,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 };
 
- // ==========================================
+  // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
@@ -534,7 +534,7 @@ public:
     void refreshGhostListUI() {
         if (!m_listMenu) return; 
         m_listMenu->removeAllChildrenWithCleanup(true);
-        float yOffset = 60.f;
+        float yOffset = 45.f; // Shifted slightly down to clear space for the record button relocation
 
         auto& ghosts = GhostManager::get()->getActiveGhosts();
         for (size_t i = 0; i < ghosts.size(); ++i) {
@@ -604,8 +604,11 @@ public:
         this->refreshGhostListUI();
 
         auto bottomMenu = CCMenu::create();
-        bottomMenu->setPosition({winSize.width / 2, winSize.height / 2 - 95.f});
-        m_mainLayer->addChild(bottomMenu);
+        // FIXED: Shifted position up to -45.f so it lives comfortably inside the UI box boundary
+        bottomMenu->setPosition({winSize.width / 2, winSize.height / 2 - 45.f});
+        
+        // FIXED: Added a Z-Index multiplier of 999 to guarantee hitboxes register over everything
+        m_mainLayer->addChild(bottomMenu, 999);
 
         auto recBtnSprite = ButtonSprite::create("Record New Route", "goldFont.fnt", "GJ_button_01.png");
         if (recBtnSprite) {
@@ -616,7 +619,6 @@ public:
         return true;
     }
 
-    // CHATGPT DIAGNOSTIC: Testing if button interaction functions at all
     void onInitiateRecordAction(CCObject*) {
         Notification::create(
             "Record button pressed!",
