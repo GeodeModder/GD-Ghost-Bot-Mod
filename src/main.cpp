@@ -9,7 +9,6 @@
 #include <string>
 #include <algorithm>
 #include <unordered_map>
-#include <thread>
 
 using namespace geode::prelude;
 
@@ -25,7 +24,7 @@ struct RuntimeGhost {
     std::string name;
     ccColor3B color;
     bool isEnabled;
-    std::string filename; // 🔒 Used as our permanent, immutable Unique ID
+    std::string filename; // 🔒 Permanent Unique ID Token
     uint32_t lookAheadTicks = 0; 
     std::vector<GhostFrame> frames;
 };
@@ -78,41 +77,37 @@ public:
         return uniqueName;
     }
 
-    // 🧵 Optimization: Non-blocking asynchronous metadata serialization
+    // ⚡ Safe Modern Synchronous matjson Serializer 
     void saveMetadataFile(int levelID) {
         auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
         std::filesystem::create_directories(dir);
         auto metaPath = dir / "metadata.json";
 
-        auto ghostsArr = matjson::Array();
+        auto ghostsArr = matjson::Value::array();
         for (auto const& g : m_activeGhosts) {
-            auto ghostObj = matjson::Object();
+            auto ghostObj = matjson::Value::object();
             ghostObj["name"] = g.name;
             ghostObj["enabled"] = g.isEnabled;
             ghostObj["filename"] = g.filename;
             ghostObj["lookahead_ticks"] = static_cast<int>(g.lookAheadTicks);
             
-            auto colArr = matjson::Array();
-            colArr.push_back(static_cast<int>(g.color.r));
-            colArr.push_back(static_cast<int>(g.color.g));
-            colArr.push_back(static_cast<int>(g.color.b));
+            auto colArr = matjson::Value::array();
+            colArr.push(static_cast<int>(g.color.r));
+            colArr.push(static_cast<int>(g.color.g));
+            colArr.push(static_cast<int>(g.color.b));
             ghostObj["color"] = colArr;
 
-            ghostsArr.push_back(ghostObj);
+            ghostsArr.push(ghostObj);
         }
 
-        auto root = matjson::Object();
+        auto root = matjson::Value::object();
         root["ghosts"] = ghostsArr;
 
-        std::string metaStr = matjson::Value(root).dump(matjson::JSONFormat::Indented);
-        
-        std::thread([metaPath, metaStr]() {
-            std::ofstream file(metaPath);
-            if (!file.fail()) {
-                file << metaStr;
-            }
-            file.close();
-        }).detach();
+        std::ofstream file(metaPath);
+        if (!file.fail()) {
+            file << root.dump(4);
+        }
+        file.close();
     }
 
     void loadMacroFramework(int levelID) {
@@ -126,25 +121,27 @@ public:
         if (metaFile.fail()) return;
 
         std::string metaStr((std::istreambuf_iterator<char>(metaFile)), std::istreambuf_iterator<char>());
-        auto metaJson = matjson::parse(metaStr).unwrapOrDefault();
         metaFile.close();
 
-        if (!metaJson.contains("ghosts") || !metaJson["ghosts"].is_array()) return;
+        auto metaJsonResult = matjson::parse(metaStr);
+        if (!metaJsonResult) return;
+        auto metaJson = metaJsonResult.unwrap();
 
-        for (auto const& g : metaJson["ghosts"].as_array()) {
+        if (!metaJson.contains("ghosts") || !metaJson["ghosts"].isArray()) return;
+
+        for (auto const& g : metaJson["ghosts"]) {
             if (!g.contains("name") || !g.contains("filename")) continue;
 
             RuntimeGhost ghost;
-            ghost.name = g["name"].as_string();
-            ghost.isEnabled = g.contains("enabled") ? g["enabled"].as_bool() : true;
-            ghost.filename = g["filename"].as_string();
-            ghost.lookAheadTicks = g.contains("lookahead_ticks") ? static_cast<uint32_t>(g["lookahead_ticks"].as_int()) : 0;
+            ghost.name = g["name"].asString().unwrapOrDefault();
+            ghost.isEnabled = g.contains("enabled") ? g["enabled"].asBool().unwrapOrDefault() : true;
+            ghost.filename = g["filename"].asString().unwrapOrDefault();
+            ghost.lookAheadTicks = g.contains("lookahead_ticks") ? static_cast<uint32_t>(g["lookahead_ticks"].asInt().unwrapOrDefault()) : 0;
 
-            if (g.contains("color") && g["color"].is_array() && g["color"].as_array().size() >= 3) {
-                auto colorArr = g["color"].as_array();
-                ghost.color.r = static_cast<uint8_t>(colorArr[0].as_int());
-                ghost.color.g = static_cast<uint8_t>(colorArr[1].as_int());
-                ghost.color.b = static_cast<uint8_t>(colorArr[2].as_int());
+            if (g.contains("color") && g["color"].isArray() && g["color"].size() >= 3) {
+                ghost.color.r = static_cast<uint8_t>(g["color"][0].asInt().unwrapOrDefault());
+                ghost.color.g = static_cast<uint8_t>(g["color"][1].asInt().unwrapOrDefault());
+                ghost.color.b = static_cast<uint8_t>(g["color"][2].asInt().unwrapOrDefault());
             } else {
                 ghost.color = {0, 255, 255}; 
             }
@@ -154,23 +151,26 @@ public:
                 std::ifstream macroFile(macroPath);
                 if (!macroFile.fail()) {
                     std::string macroStr((std::istreambuf_iterator<char>(macroFile)), std::istreambuf_iterator<char>());
-                    auto macroJson = matjson::parse(macroStr).unwrapOrDefault();
+                    macroFile.close();
 
-                    if (macroJson.contains("frames") && macroJson["frames"].is_array()) {
-                        for (auto const& f : macroJson["frames"].as_array()) {
-                            if (!f.contains("tick") || !f.contains("x") || !f.contains("y") || !f.contains("rot")) continue;
-                            if (!f["tick"].is_number() || !f["x"].is_number() || !f["y"].is_number() || !f["rot"].is_number()) continue;
+                    auto macroJsonResult = matjson::parse(macroStr);
+                    if (macroJsonResult) {
+                        auto macroJson = macroJsonResult.unwrap();
+                        if (macroJson.contains("frames") && macroJson["frames"].isArray()) {
+                            for (auto const& f : macroJson["frames"]) {
+                                if (!f.contains("tick") || !f.contains("x") || !f.contains("y") || !f.contains("rot")) continue;
+                                if (!f["tick"].isNumber() || !f["x"].isNumber() || !f["y"].isNumber() || !f["rot"].isNumber()) continue;
 
-                            ghost.frames.push_back({
-                                static_cast<uint32_t>(f["tick"].as_int()),
-                                static_cast<float>(f["x"].as_double()),
-                                static_cast<float>(f["y"].as_double()),
-                                static_cast<float>(f["rot"].as_double())
-                            });
+                                ghost.frames.push_back({
+                                    static_cast<uint32_t>(f["tick"].asInt().unwrapOrDefault()),
+                                    static_cast<float>(f["x"].asDouble().unwrapOrDefault()),
+                                    static_cast<float>(f["y"].asDouble().unwrapOrDefault()),
+                                    static_cast<float>(f["rot"].asDouble().unwrapOrDefault())
+                                });
+                            }
                         }
                     }
                 }
-                macroFile.close();
             }
             m_activeGhosts.push_back(ghost);
         }
@@ -180,7 +180,7 @@ public:
 // ==========================================
 // 💬 DIALOG INTERFACE POPUPS
 // ==========================================
-class GhostNameDialog : public FLAlertLayer, public TextInputDelegate {
+class GhostNameDialog : public FLAlertLayer, public TextInputDelegate, public FLAlertLayerProtocol {
 private:
     int m_levelID;
     size_t m_editIndex;
@@ -204,7 +204,8 @@ public:
     bool init() override {
         float width = 320.f;
         float height = 160.f;
-        if (!FLAlertLayer::init(this, m_isRenameMode ? "Rename Route" : "Save Route", "Cancel", "Confirm", width, false, height, 1.f)) return false;
+        // 🛠️ Fixed 9-argument layout configuration
+        if (!FLAlertLayer::init(this, m_isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", width, false, height, 1.f)) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         m_inputField = TextInput::create(220.f, "Route Name...");
@@ -233,17 +234,16 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         uint32_t m_physicsTicks = 0; 
         bool m_wasDeadLastFrame = false;
         bool m_saveFlowTriggered = false; 
-        // 🔒 Robust Identifier Map: Associates unique filenames to their active render elements
         std::unordered_map<std::string, SimplePlayer*> m_ghostSprites; 
     };
 
-    // Centralized Single-Responsibility factory logic for generating sprites
     SimplePlayer* createGhostSprite(ccColor3B routeColor) {
         auto playerFrame = GameManager::sharedState()->getPlayerFrame();
         auto ghostSprite = SimplePlayer::create(playerFrame);
         if (ghostSprite) {
             ghostSprite->setColor(routeColor);
-            ghostSprite->setSecondColor(GameManager::sharedState()->getPlayerColor2());
+            // 🛠️ Fixed Color ID mismatch using colorForIdx
+            ghostSprite->setSecondColor(GameManager::sharedState()->colorForIdx(GameManager::sharedState()->getPlayerColor2()));
             ghostSprite->setOpacity(130);
             ghostSprite->setVisible(false);
             ghostSprite->setScale(0.9f);
@@ -252,27 +252,25 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return ghostSprite;
     }
 
-    // ⚡ High-Speed Visibility Controls (Avoids costly node reconstruction cycles)
     void updateGhostVisibility(std::string const& filename, bool enabled) {
-        if (m_fields->m_ghostSprites.contains(filename)) {
-            auto sprite = m_fields->m_ghostSprites[filename];
-            if (sprite) sprite->setVisible(enabled);
+        auto it = m_fields->m_ghostSprites.find(filename);
+        if (it != m_fields->m_ghostSprites.end() && it->second) {
+            it->second->setVisible(enabled);
         }
     }
 
-    // Safe dynamic node extraction on file purges
     void removeGhostSprite(std::string const& filename) {
-        if (m_fields->m_ghostSprites.contains(filename)) {
-            auto sprite = m_fields->m_ghostSprites[filename];
-            if (sprite) sprite->removeFromParentAndCleanup(true);
-            m_fields->m_ghostSprites.erase(filename);
+        auto it = m_fields->m_ghostSprites.find(filename);
+        if (it != m_fields->m_ghostSprites.end()) {
+            if (it->second) it->second->removeFromParentAndCleanup(true);
+            m_fields->m_ghostSprites.erase(it);
         }
     }
 
     void syncGhostSpriteColor(std::string const& filename, ccColor3B color) {
-        if (m_fields->m_ghostSprites.contains(filename)) {
-            auto sprite = m_fields->m_ghostSprites[filename];
-            if (sprite) sprite->setColor(color);
+        auto it = m_fields->m_ghostSprites.find(filename);
+        if (it != m_fields->m_ghostSprites.end() && it->second) {
+            it->second->setColor(color);
         }
     }
 
@@ -305,8 +303,9 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    void processCommands() override {
-        PlayLayer::processCommands();
+    // 🛠️ Modified signature and removed 'override' keyword from Geode macro structures
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        PlayLayer::processCommands(dt, isHalfTick, isLastTick);
         if (!m_player1) return;
 
         if (m_player1->m_isDead) {
@@ -343,7 +342,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_physicsTicks++;
     }
 
-    void update(float dt) override {
+    void update(float dt) {
         PlayLayer::update(dt);
         if (!m_player1 || m_player1->m_isDead) return;
 
@@ -351,10 +350,9 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         for (auto const& ghostData : routes) {
             if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
 
-            // ⚡ O(1) Stable Pointer Lookup from Map Structure
-            if (!m_fields->m_ghostSprites.contains(ghostData.filename)) continue;
-            auto ghostSprite = m_fields->m_ghostSprites[ghostData.filename];
-            if (!ghostSprite) continue;
+            auto it = m_fields->m_ghostSprites.find(ghostData.filename);
+            if (it == m_fields->m_ghostSprites.end() || !it->second) continue;
+            auto ghostSprite = it->second;
 
             uint32_t targetTick = m_fields->m_physicsTicks + ghostData.lookAheadTicks;
             
@@ -407,27 +405,27 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    void playEndAnimationToPos(cocos2d::CCPoint pos) override {
+    void playEndAnimationToPos(cocos2d::CCPoint pos) {
         PlayLayer::playEndAnimationToPos(pos);
         if (m_glInPracticeMode) this->executeUnifiedSaveFlow();
     }
 
-    void levelComplete() override {
+    void levelComplete() {
         PlayLayer::levelComplete();
         this->executeUnifiedSaveFlow();
     }
 
-    void onQuit() override {
+    void onQuit() {
         GhostManager::get()->clearVolatileBuffers();
         PlayLayer::onQuit();
     }
 
-    void createCheckpoint() override {
+    void createCheckpoint() {
         PlayLayer::createCheckpoint();
         m_fields->m_checkpointTicks.push_back(m_fields->m_physicsTicks);
     }
 
-    void removeLastCheckpoint() override {
+    void removeLastCheckpoint() {
         PlayLayer::removeLastCheckpoint();
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
@@ -446,28 +444,25 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     std::string filename = "ghost_" + std::to_string(geode::utils::time::getMillis()) + ".json";
     auto macroPath = dir / filename;
 
-    auto framesArr = matjson::Array();
+    auto framesArr = matjson::Value::array();
     for (auto const& f : buffer) {
-        auto fObj = matjson::Object();
+        auto fObj = matjson::Value::object();
         fObj["tick"] = static_cast<int>(f.tick);
         fObj["x"] = f.x;
         fObj["y"] = f.y;
         fObj["rot"] = f.rot;
-        framesArr.push_back(fObj);
+        framesArr.push(fObj);
     }
-    auto root = matjson::Object();
+    auto root = matjson::Value::object();
     root["frames"] = framesArr;
 
-    // 🧵 Optimization: Offload stringified JSON data saving to background execution workers
-    std::string jsonStr = matjson::Value(root).dump(matjson::JSONFormat::Compact);
-    
-    std::thread([macroPath, jsonStr]() {
-        std::ofstream file(macroPath);
-        if (!file.fail()) {
-            file << jsonStr;
-        }
-        file.close();
-    }).detach();
+    std::ofstream file(macroPath);
+    if (file.fail()) {
+        Notification::create("Failed to write macro data file!", NotificationIcon::Error)->show();
+        return;
+    }
+    file << root.dump(matjson::NO_INDENTATION);
+    file.close();
 
     RuntimeGhost newGhost;
     newGhost.name = GhostManager::get()->getUniqueRouteName(finalName);
@@ -529,4 +524,5 @@ public:
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         m_listMenu = CCMenu::create();
-        
+        m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
+        m_mainLayer->a
