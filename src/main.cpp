@@ -240,7 +240,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         auto playerFrame = GameManager::sharedState()->getPlayerFrame();
         
         if (ghostSprite) {
-            ghostSprite->updatePlayerFrame(playerFrame);
+            // FIXED: Added IconType::Cube to satisfy Geode 5.7.1 API signature requirements
+            ghostSprite->updatePlayerFrame(playerFrame, IconType::Cube);
             ghostSprite->setColor(routeColor);
             ghostSprite->setSecondColor(GameManager::sharedState()->colorForIdx(GameManager::sharedState()->getPlayerColor2()));
             ghostSprite->setOpacity(130);
@@ -422,6 +423,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
 };
+
 // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
