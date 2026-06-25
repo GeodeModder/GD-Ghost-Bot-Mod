@@ -176,7 +176,6 @@ public:
         }
     }
 };
-
 // ==========================================
 // 💬 DIALOG INTERFACE POPUPS
 // ==========================================
@@ -422,7 +421,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         if (!m_fields->m_checkpointTicks.empty()) m_fields->m_checkpointTicks.pop_back();
     }
 };
-
 // ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
@@ -497,10 +495,11 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
 // ==========================================
-class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
+class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol, public ColorPickPopupDelegate {
 private:
     int m_levelID;
     CCMenu* m_listMenu = nullptr;
+    size_t m_colorEditIdx = 0;
 
 public:
     static GhostPopup* create(int levelID) {
@@ -514,6 +513,19 @@ public:
         return nullptr;
     }
 
+    void updateColor(cocos2d::ccColor3B color) override {
+        auto& ghostsRef = GhostManager::get()->getActiveGhosts();
+        if (m_colorEditIdx < ghostsRef.size()) {
+            ghostsRef[m_colorEditIdx].color = color;
+            GhostManager::get()->saveMetadataFile(m_levelID);
+            
+            if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+                pl->syncGhostSpriteColor(ghostsRef[m_colorEditIdx].filename, color);
+            }
+            this->refreshGhostListUI();
+        }
+    }
+
     void refreshGhostListUI() {
         m_listMenu->removeAllChildrenWithCleanup(true);
         float yOffset = 60.f;
@@ -525,5 +537,189 @@ public:
             auto colorSprite = CCSprite::createWithSpriteFrameName("GJ_colorBtn_001.png");
             colorSprite->setColor(ghost.color);
             colorSprite->setScale(0.6f);
-            auto colBtn = CCMenuItemSpriteExtra::create(this, menu_selector(GhostPopup::onSelectColorPalette));
-            colBtn->setNormalImage(color
+            
+            auto colBtn = CCMenuItemSpriteExtra::create(colorSprite, this, menu_selector(GhostPopup::onSelectColorPalette));
+            colBtn->setTag(static_cast<int>(i));
+            colBtn->setPosition({-150.f, yOffset});
+            m_listMenu->addChild(colBtn);
+
+            auto toggleBtn = CCMenuItemToggler::createWithStandardSprites(
+                this, menu_selector(GhostPopup::onToggleGhostVisibility), 0.6f
+            );
+            toggleBtn->toggle(ghost.isEnabled);
+            toggleBtn->setTag(static_cast<int>(i));
+            toggleBtn->setPosition({-110.f, yOffset});
+            m_listMenu->addChild(toggleBtn);
+
+            auto label = CCLabelBMFont::create(ghost.name.c_str(), "bigFont.fnt");
+            label->setScale(0.4f);
+            label->setAnchorPoint({0.f, 0.5f});
+            label->setPosition({-85.f, yOffset});
+            if (!ghost.isEnabled) label->setOpacity(90);
+            m_listMenu->addChild(label);
+
+            auto editSprite = CCSprite::createWithSpriteFrameName("GJ_editBtn_001.png");
+            editSprite->setScale(0.55f);
+            
+            auto editBtn = CCMenuItemSpriteExtra::create(editSprite, this, menu_selector(GhostPopup::onRenameProfileRoute));
+            editBtn->setTag(static_cast<int>(i));
+            editBtn->setPosition({110.f, yOffset});
+            m_listMenu->addChild(editBtn);
+
+            auto delSprite = CCSprite::createWithSpriteFrameName("GJ_trashBtn_001.png");
+            delSprite->setScale(0.55f);
+            
+            auto delBtn = CCMenuItemSpriteExtra::create(delSprite, this, menu_selector(GhostPopup::onDeleteProfileRecord));
+            delBtn->setTag(static_cast<int>(i));
+            delBtn->setPosition({145.f, yOffset});
+            m_listMenu->addChild(delBtn);
+
+            yOffset -= 35.f;
+        }
+    }
+
+    bool init() override {
+        if (!FLAlertLayer::init(this, "Ghost Manager", "Close", nullptr, nullptr, 380.f, false, 250.f, 1.f)) return false;
+
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+        m_listMenu = CCMenu::create();
+        m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
+        m_mainLayer->addChild(m_listMenu);
+
+        this->refreshGhostListUI();
+
+        auto bottomMenu = CCMenu::create();
+        bottomMenu->setPosition({winSize.width / 2, winSize.height / 2 - 95.f});
+        m_mainLayer->addChild(bottomMenu);
+
+        auto recBtnSprite = ButtonSprite::create("🔴 Record New Route", "goldFont.fnt", "GJ_button_01.png");
+        
+        auto recBtn = CCMenuItemSpriteExtra::create(recBtnSprite, this, menu_selector(GhostPopup::onInitiateRecordAction));
+        bottomMenu->addChild(recBtn);
+
+        return true;
+    }
+
+    void onToggleGhostVisibility(CCObject* sender) {
+        auto toggler = static_cast<CCMenuItemToggler*>(sender);
+        size_t idx = static_cast<size_t>(toggler->getTag());
+        auto& ghosts = GhostManager::get()->getActiveGhosts();
+        if (idx >= ghosts.size()) return;
+
+        ghosts[idx].isEnabled = !toggler->isToggled(); 
+        GhostManager::get()->saveMetadataFile(m_levelID);
+
+        if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+            pl->updateGhostVisibility(ghosts[idx].filename, ghosts[idx].isEnabled);
+        }
+        this->refreshGhostListUI();
+    }
+
+    void onInitiateRecordAction(CCObject*) {
+        GhostManager::get()->setRecording(true);
+        GhostManager::get()->getRecordingBuffer().clear();
+
+        if (auto pl = PlayLayer::get()) {
+            pl->togglePracticeMode(true);
+            pl->resetLevel();
+            this->keyBackClicked();
+        }
+    }
+
+    void onSelectColorPalette(CCObject* sender) {
+        size_t idx = static_cast<size_t>(sender->getTag());
+        auto& ghosts = GhostManager::get()->getActiveGhosts();
+        if (idx >= ghosts.size()) return;
+
+        m_colorEditIdx = idx;
+        
+        auto popup = ColorPickPopup::create(ghosts[idx].color);
+        if (popup) {
+            popup->setDelegate(this);
+            popup->show();
+        }
+    }
+
+    void onRenameProfileRoute(CCObject* sender) {
+        size_t idx = static_cast<size_t>(sender->getTag());
+        if (idx >= GhostManager::get()->getActiveGhosts().size()) return;
+
+        auto inputPopup = GhostNameDialog::create(m_levelID, true, idx);
+        inputPopup->show();
+        this->keyBackClicked();
+    }
+
+    void onDeleteProfileRecord(CCObject* sender) {
+        size_t idx = static_cast<size_t>(sender->getTag());
+        auto& ghosts = GhostManager::get()->getActiveGhosts();
+        if (idx >= ghosts.size()) return;
+
+        std::string targetFilename = ghosts[idx].filename;
+        auto dir = Mod::get()->getSaveDir() / std::to_string(m_levelID);
+        auto targetFile = dir / targetFilename;
+
+        std::error_code ec;
+        if (std::filesystem::exists(targetFile)) {
+            std::filesystem::remove(targetFile, ec);
+        }
+
+        if (!ec) {
+            ghosts.erase(ghosts.begin() + idx);
+            GhostManager::get()->saveMetadataFile(m_levelID);
+            
+            if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+                pl->removeGhostSprite(targetFilename);
+            }
+        }
+        this->refreshGhostListUI();
+    }
+
+    void FLAlert_Clicked(FLAlertLayer*, bool) override {}
+    static void open(int levelID) {
+        if (auto p = GhostPopup::create(levelID)) p->show();
+    }
+};
+
+// ==========================================
+// ⏸️ HYBRID PAUSE MATRIX OVERRIDES
+// ==========================================
+struct $modify(MyPauseLayer, PauseLayer) {
+    void customSetup() {
+        PauseLayer::customSetup();
+        auto menu = this->getChildByID("right-button-menu");
+        auto winSize = CCDirector::sharedDirector()->getWinSize();
+
+        if (menu) {
+            auto managerBtnSprite = CCSprite::createWithSpriteFrameName("GJ_downloadsIcon_001.png");
+            
+            auto managerBtn = CCMenuItemSpriteExtra::create(managerBtnSprite, this, menu_selector(MyPauseLayer::onOpenGhostConfigPanel));
+            menu->addChild(managerBtn);
+            menu->updateLayout();
+        }
+
+        if (GhostManager::get()->isRecording() && !GhostManager::get()->getRecordingBuffer().empty()) {
+            auto manualSaveMenu = CCMenu::create();
+            manualSaveMenu->setPosition({winSize.width / 2, winSize.height / 2 + 55.f});
+            this->addChild(manualSaveMenu, 1000);
+
+            auto saveBtnSprite = ButtonSprite::create("🟢 Finish & Save Route", "goldFont.fnt", "GJ_button_02.png");
+            
+            auto saveBtn = CCMenuItemSpriteExtra::create(saveBtnSprite, this, menu_selector(MyPauseLayer::onManualSaveOverrideAction));
+            manualSaveMenu->addChild(saveBtn);
+        }
+    }
+
+    void onOpenGhostConfigPanel(CCObject*) {
+        if (auto pl = PlayLayer::get()) {
+            GhostPopup::open(pl->m_level->m_levelID);
+        }
+    }
+
+    void onManualSaveOverrideAction(CCObject*) {
+        if (auto pl = PlayLayer::get()) {
+            auto dialog = GhostNameDialog::create(pl->m_level->m_levelID, false);
+            dialog->show();
+            this->onUnpause(nullptr);
+        }
+    }
+};
