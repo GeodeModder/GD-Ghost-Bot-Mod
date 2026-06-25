@@ -495,7 +495,7 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
 // ==========================================
-class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol, public ColorPickerDelegate {
+class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
 private:
     int m_levelID;
     CCMenu* m_listMenu = nullptr;
@@ -524,11 +524,6 @@ public:
             }
             this->refreshGhostListUI();
         }
-    }
-
-    // ColorPickerDelegate implementation
-    void colorValueChanged(cocos2d::ccColor3B color) override {
-        this->updateColorValue(color);
     }
 
     void refreshGhostListUI() {
@@ -637,7 +632,11 @@ public:
         if (idx >= ghosts.size()) return;
 
         m_colorEditIdx = idx;
-        auto popup = ColorPickPopup::create(this, ghosts[idx].color);
+        
+        auto popup = ColorPickPopup::create(ghosts[idx].color);
+        popup->setColorCallback([this](cocos2d::ccColor4B color) {
+            this->updateColorValue({color.r, color.g, color.b});
+        });
         popup->show();
     }
 
