@@ -3,8 +3,7 @@
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/ui/ColorPickPopup.hpp>
 #include <Geode/binding/SimplePlayer.hpp>
-#include <Geode/ui/Popup.hpp>       // FIXED: Added for modern watertight touch isolation
-#include <Geode/ui/TextInput.hpp>   // FIXED: Added for modern synced text input processing
+#include <Geode/ui/TextInput.hpp>   
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -180,30 +179,31 @@ public:
 };
 
 // ==========================================
-// 💬 DIALOG INTERFACE POPUPS (MODERNIZED)
+// 💬 DIALOG INTERFACE POPUPS (BACK TO COCOS)
 // ==========================================
-// REFACTORED: Inherits from geode::Popup to enforce watertight touch mechanics
-class GhostNameDialog : public geode::Popup<int, bool, size_t> {
+// FIXED: Reverted entirely back to FLAlertLayer & FLAlertLayerProtocol to match Geode 5.7.1 SDK limits perfectly
+class GhostNameDialog : public FLAlertLayer, public FLAlertLayerProtocol {
 protected:
     int m_levelID;
     bool m_isRenameMode;
     size_t m_editIndex;
     geode::TextInput* m_inputField = nullptr;
 
-    bool setup(int levelID, bool isRenameMode, size_t editIndex) override;
-    void onConfirm(cocos2d::CCObject* sender);
-    void onCancel(cocos2d::CCObject* sender);
+    bool init(int levelID, bool isRenameMode, size_t editIndex);
 
 public:
     static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0) {
         auto ret = new GhostNameDialog();
-        if (ret && ret->initAnchored(320.f, 160.f, levelID, isRenameMode, editIndex)) {
+        if (ret && ret->init(levelID, isRenameMode, editIndex)) {
             ret->autorelease();
             return ret;
         }
         CC_SAFE_DELETE(ret);
         return nullptr;
     }
+
+    // NATIVE HOOK: Standard RobTop confirmation protocol click handler
+    void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override;
 };
 // ==========================================
 // 🕹️ DECOUPLED SIMULATION ENGINE HOOK MATRIX
@@ -406,7 +406,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 };
 
 // ==========================================
-// 💬 POST-DIALOG DECLARATION ATTACHMENTS
+// 💬 FLALERTLAYER MEMORY & EXECUTION FLOWS
 // ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto& buffer = GhostManager::get()->getRecordingBuffer();
@@ -459,15 +459,20 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     Notification::create("Route Saved Flawlessly!", NotificationIcon::Success)->show();
 }
 
-bool GhostNameDialog::setup(int levelID, bool isRenameMode, size_t editIndex) {
+// FIXED: Converted setup to standard FLAlertLayer custom container layout initializing methods
+bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex) {
+    if (!FLAlertLayer::init(this, isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", 320.f, false, 140.f, 0.8f)) {
+        return false;
+    }
+
     m_levelID = levelID;
     m_isRenameMode = isRenameMode;
     m_editIndex = editIndex;
 
-    this->setTitle(m_isRenameMode ? "Rename Route" : "Save Route", "bigFont.fnt", 0.7f);
+    auto winSize = CCDirector::sharedDirector()->getWinSize();
 
     m_inputField = geode::TextInput::create(220.f, "Route Name...", "chatFont.fnt");
-    m_inputField->setPosition({ m_size.width / 2, m_size.height / 2 + 15.f });
+    m_inputField->setPosition({ winSize.width / 2, winSize.height / 2 + 10.f });
     m_inputField->setMaxCharCount(22);
     m_inputField->setFilter("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ ");
 
@@ -478,40 +483,29 @@ bool GhostNameDialog::setup(int levelID, bool isRenameMode, size_t editIndex) {
     }
     m_mainLayer->addChild(m_inputField);
 
-    auto cancelBtnSprite = ButtonSprite::create("Cancel", "goldFont.fnt", "GJ_button_01.png", 0.8f);
-    auto cancelBtn = CCMenuItemSpriteExtra::create(cancelBtnSprite, this, menu_selector(GhostNameDialog::onCancel));
-    cancelBtn->setPosition({ m_size.width / 2 - 65.f, m_size.height / 2 - 40.f });
-
-    auto confirmBtnSprite = ButtonSprite::create("Confirm", "goldFont.fnt", "GJ_button_01.png", 0.8f);
-    auto confirmBtn = CCMenuItemSpriteExtra::create(confirmBtnSprite, this, menu_selector(GhostNameDialog::onConfirm));
-    confirmBtn->setPosition({ m_size.width / 2 + 65.f, m_size.height / 2 - 40.f });
-
-    m_buttonMenu->addChild(cancelBtn);
-    m_buttonMenu->addChild(confirmBtn);
-
     return true;
 }
 
-void GhostNameDialog::onConfirm(cocos2d::CCObject* sender) {
-    std::string textResult = m_inputField->getString();
-    if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
+// FIXED: Replaced manual click triggers with RobTop's unified modal state loop
+void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
+    if (secondButton) { 
+        std::string textResult = m_inputField->getString();
+        if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
 
-    if (m_isRenameMode) {
-        if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-            GhostManager::get()->getActiveGhosts()[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult);
-            GhostManager::get()->saveMetadataFile(m_levelID);
+        if (m_isRenameMode) {
+            if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
+                GhostManager::get()->getActiveGhosts()[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult);
+                GhostManager::get()->saveMetadataFile(m_levelID);
+            }
+        } else {
+            commitGhostToDiskAndMemory(m_levelID, textResult);
         }
-    } else {
-        commitGhostToDiskAndMemory(m_levelID, textResult);
+    } else { 
+        if (!m_isRenameMode) {
+            GhostManager::get()->clearVolatileBuffers();
+        }
     }
-    this->onClose(sender);
-}
-
-void GhostNameDialog::onCancel(cocos2d::CCObject* sender) {
-    if (!m_isRenameMode) {
-        GhostManager::get()->clearVolatileBuffers();
-    }
-    this->onClose(sender);
+    // RobTop's base code automatically handles dismissing and touch unregistering now!
 }
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
@@ -615,6 +609,9 @@ public:
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         m_listMenu = CCMenu::create();
         m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
+        
+        // CRITICAL TOUCH FIX: Overrides the background layer block so items are perfectly click-responsive!
+        m_listMenu->setTouchPriority(-141); 
         m_mainLayer->addChild(m_listMenu);
 
         this->refreshGhostListUI();
