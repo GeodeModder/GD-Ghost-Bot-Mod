@@ -645,38 +645,40 @@ public:
     }
 
     void onInitiateRecordAction(CCObject*) {
-        if (!PlayLayer::get()) return;
+        // Capture pl/gpl FIRST, before any UI teardown or resets, so we
+        // always have a valid pointer even if keyBackClicked / togglePracticeMode
+        // causes intermediate scene-management side effects.
+        auto pl = PlayLayer::get();
+        if (!pl) return;
+        auto gpl = static_cast<GhostPlayLayer*>(pl);
 
         GhostManager::get()->setRecording(true);
         GhostManager::get()->getRecordingBuffer().clear();
 
-        // Dismiss GhostPopup BEFORE touching PlayLayer (Bug 4 fix).
-        this->keyBackClicked();
-
-        auto pl = PlayLayer::get();
-        if (!pl) return;
-
-        auto gpl = static_cast<GhostPlayLayer*>(pl);
-
-        // Raise the reset guard so any playEndAnimationToPos / levelComplete
-        // calls that fire internally during togglePracticeMode or resetLevel
-        // don't open the save dialog mid-reset.
+        // Raise reset guard before any internal resets fire so that
+        // playEndAnimationToPos / levelComplete hooks can't open the save
+        // dialog while we're still setting up the recording session.
         if (gpl) gpl->m_fields->m_isResetting = true;
 
         if (!pl->m_isPracticeMode) {
             pl->togglePracticeMode(true);
+            // In GD 2.2081 togglePracticeMode calls resetLevel internally.
         }
         pl->resetLevel();
 
-        // Now that all resets are done, clear the guard and snap all fields
-        // to a clean recording state (Bug 1 fix — done AFTER resets so any
-        // spurious hook writes are overwritten).
+        // Override any field state the internal resets may have written.
+        // This must happen AFTER all resets — that's the whole point of Bug 1.
         if (gpl) {
-            gpl->m_fields->m_isResetting = false;
-            gpl->m_fields->m_saveFlowTriggered = false;
-            gpl->m_fields->m_physicsTicks = 0;
+            gpl->m_fields->m_isResetting      = false;
+            gpl->m_fields->m_saveFlowTriggered = false; // critical — keeps frame capture open
+            gpl->m_fields->m_physicsTicks      = 0;
             gpl->m_fields->m_checkpointTicks.clear();
         }
+
+        // Close GhostPopup last. At this point game state is fully prepared,
+        // so when the user dismisses the PauseLayer the scheduler resumes and
+        // update() immediately starts capturing frames with recording = true.
+        this->keyBackClicked();
     }
 
     void onToggleGhostVisibility(CCObject* sender) {
