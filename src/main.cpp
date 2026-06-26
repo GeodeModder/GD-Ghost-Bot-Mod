@@ -213,7 +213,10 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         std::vector<uint32_t> m_checkpointTicks; 
         uint32_t m_physicsTicks = 0; 
         bool m_wasDeadLastFrame = false;
-        bool m_saveFlowTriggered = false; 
+        bool m_saveFlowTriggered = false;
+        // Guards against playEndAnimationToPos firing spuriously during
+        // togglePracticeMode / resetLevel inside onInitiateRecordAction.
+        bool m_isResetting = false;
         std::unordered_map<std::string, SimplePlayer*> m_ghostSprites; 
     };
 
@@ -255,7 +258,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_checkpointTicks.clear();
         m_fields->m_physicsTicks = 0;
         m_fields->m_wasDeadLastFrame = false;
-        m_fields->m_saveFlowTriggered = false; 
+        m_fields->m_saveFlowTriggered = false;
+        m_fields->m_isResetting = false;
 
         GhostManager::get()->loadMacroFramework(level->m_levelID);
         initializeRenderPool();
@@ -356,13 +360,13 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_physicsTicks++;
     }
 
-    // Fix (Bug 3): Only hook levelComplete — not playEndAnimationToPos.
-    // In GD 2.2081, PlayLayer::levelComplete internally calls
-    // playEndAnimationToPos, so hooking both caused executeUnifiedSaveFlow
-    // to fire twice, which also made it fire spuriously during level resets
-    // that internally trigger end-animation paths.
     void executeUnifiedSaveFlow() {
-        if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
+        // m_isResetting blocks the save dialog from opening during
+        // togglePracticeMode / resetLevel inside onInitiateRecordAction,
+        // where playEndAnimationToPos can fire spuriously.
+        if (GhostManager::get()->isRecording()
+            && !m_fields->m_saveFlowTriggered
+            && !m_fields->m_isResetting) {
             m_fields->m_saveFlowTriggered = true;
 
             auto popup = GhostNameDialog::create(m_level->m_levelID, false);
@@ -372,12 +376,19 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
+    // Hook both levelComplete (normal mode) and playEndAnimationToPos
+    // (practice mode — practice completion skips levelComplete in GD 2.2081).
+    // The m_saveFlowTriggered guard prevents double-firing when levelComplete
+    // calls playEndAnimationToPos internally on a normal completion.
     void levelComplete() {
         PlayLayer::levelComplete();
         this->executeUnifiedSaveFlow();
     }
 
-    // playEndAnimationToPos is intentionally NOT hooked (Bug 3 fix).
+    void playEndAnimationToPos(cocos2d::CCPoint pos) {
+        PlayLayer::playEndAnimationToPos(pos);
+        this->executeUnifiedSaveFlow();
+    }
 
     void createCheckpoint() {
         PlayLayer::createCheckpoint();
@@ -639,35 +650,33 @@ public:
         GhostManager::get()->setRecording(true);
         GhostManager::get()->getRecordingBuffer().clear();
 
-        // Fix (Bug 4): Dismiss GhostPopup BEFORE calling togglePracticeMode /
-        // resetLevel. In GD 2.2081, resetLevel dismisses the PauseLayer as a
-        // side effect, which would leave GhostPopup orphaned if we tried to
-        // call keyBackClicked() on it afterward (stale parent chain).
+        // Dismiss GhostPopup BEFORE touching PlayLayer (Bug 4 fix).
         this->keyBackClicked();
 
-        // Grab a fresh pointer — PauseLayer may have been removed by keyBackClicked
         auto pl = PlayLayer::get();
         if (!pl) return;
 
+        auto gpl = static_cast<GhostPlayLayer*>(pl);
+
+        // Raise the reset guard so any playEndAnimationToPos / levelComplete
+        // calls that fire internally during togglePracticeMode or resetLevel
+        // don't open the save dialog mid-reset.
+        if (gpl) gpl->m_fields->m_isResetting = true;
+
         if (!pl->m_isPracticeMode) {
             pl->togglePracticeMode(true);
-            // togglePracticeMode internally calls resetLevel in GD 2.2081,
-            // which can spuriously fire end-animation paths. We re-snap the
-            // fields AFTER the call so any false saveFlowTriggered is cleared.
         }
+        pl->resetLevel();
 
-        // Fix (Bug 1): Reset saveFlowTriggered AFTER togglePracticeMode (and
-        // its internal resetLevel), not before. This overwrites any spurious
-        // true value set by hooks that fired during the internal reset.
-        if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
+        // Now that all resets are done, clear the guard and snap all fields
+        // to a clean recording state (Bug 1 fix — done AFTER resets so any
+        // spurious hook writes are overwritten).
+        if (gpl) {
+            gpl->m_fields->m_isResetting = false;
             gpl->m_fields->m_saveFlowTriggered = false;
             gpl->m_fields->m_physicsTicks = 0;
             gpl->m_fields->m_checkpointTicks.clear();
         }
-
-        // Explicit resetLevel to start from the beginning cleanly.
-        // If togglePracticeMode already reset, this is a quick no-op reset.
-        pl->resetLevel();
     }
 
     void onToggleGhostVisibility(CCObject* sender) {
