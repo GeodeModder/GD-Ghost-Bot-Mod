@@ -16,9 +16,6 @@ using namespace geode::prelude;
 
 class GhostPopup;
 
-// ==========================================
-// 🏗️ DATA MODEL DEFINITIONS (PURE DATA)
-// ==========================================
 struct GhostFrame {
     uint32_t tick; 
     float x, y, rot;
@@ -33,9 +30,6 @@ struct RuntimeGhost {
     std::vector<GhostFrame> frames;
 };
 
-// ==========================================
-// 🎛️ THE GHOST DATA MANAGER (SINGLETON)
-// ==========================================
 class GhostManager {
 private:
     GhostManager() {}
@@ -181,9 +175,6 @@ public:
     }
 };
 
-// ==========================================
-// 💬 DIALOG INTERFACE POPUPS
-// ==========================================
 class GhostNameDialog : public FLAlertLayer, public FLAlertLayerProtocol {
 protected:
     int m_levelID;
@@ -207,9 +198,6 @@ public:
 
     void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override;
 };
-// ==========================================
-// 🕹️ DECOUPLED SIMULATION ENGINE HOOK MATRIX
-// ==========================================
 struct $modify(GhostPlayLayer, PlayLayer) {
     struct Fields {
         std::vector<uint32_t> m_checkpointTicks; 
@@ -264,24 +252,21 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
-    void onExit() {
-        PlayLayer::onExit();
-        GhostManager::get()->clearVolatileBuffers();
-    }
-
-    // FIXED: Shifted all capture frame mechanics out of processCommands and into the universal update loop
     void update(float dt) {
         PlayLayer::update(dt);
         if (!m_player1) return;
 
-        // 🚨 LIVE CONSOLE DEBUGGING TOOL
-        // Throttled print statement so it won't lag your game, but confirms activity every 60 frames
+        // 🚨 LIVE UN-GUARDED DEBUG LOG (Fires every 60 frames to check state)
         static int logThrottle = 0;
-        if (GhostManager::get()->isRecording() && logThrottle++ % 60 == 0) {
-            log::info("Ghost System Active | Current Buffer Frame Count: {}", GhostManager::get()->getRecordingBuffer().size());
+        if (logThrottle++ % 60 == 0) {
+            log::info(
+                "Recording={}, Buffer={}",
+                GhostManager::get()->isRecording(),
+                GhostManager::get()->getRecordingBuffer().size()
+            );
         }
 
-        // Handle player crash re-tracking & checkpoint scrubbing
+        // Handle player crash tracking
         if (m_player1->m_isDead) {
             m_fields->m_wasDeadLastFrame = true;
             return;
@@ -304,7 +289,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        // Live Coordinate Sampling
+        // Capture engine sampling loop
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
@@ -314,7 +299,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             });
         }
 
-        // Active Route Ghost Processing/Interpolation Loop
+        // Render playback matrix
         auto& routes = GhostManager::get()->getActiveGhosts();
         for (auto const& ghostData : routes) {
             if (!ghostData.isEnabled || ghostData.frames.empty()) continue;
@@ -391,9 +376,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 };
 
-// ==========================================
-// 💬 DATA WRITING UTILITIES
-// ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto& buffer = GhostManager::get()->getRecordingBuffer();
 
@@ -502,10 +484,6 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
         }
     }
 }
-
-// ==========================================
-// 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
-// ==========================================
 class GhostPopup : public FLAlertLayer, public FLAlertLayerProtocol {
 private:
     int m_levelID;
@@ -719,9 +697,6 @@ public:
     }
 };
 
-// ==========================================
-// ⏸️ HYBRID PAUSE MATRIX OVERRIDES
-// ==========================================
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
@@ -757,7 +732,6 @@ struct $modify(MyPauseLayer, PauseLayer) {
         }
     }
 
-    // FIXED: Handed off the modal execution to executeUnifiedSaveFlow directly instead of locking the tracking flags manually
     void onManualSaveOverrideAction(CCObject*) {
         if (auto pl = PlayLayer::get()) {
             if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
