@@ -14,6 +14,8 @@
 
 using namespace geode::prelude;
 
+class GhostPopup;
+
 // ==========================================
 // 🏗️ DATA MODEL DEFINITIONS (PURE DATA)
 // ==========================================
@@ -61,13 +63,14 @@ public:
         m_recordingTargetName = "";
     }
 
-    std::string getUniqueRouteName(std::string const& baseName) {
+    std::string getUniqueRouteName(std::string const& baseName, std::string const& ignoreFilename = "") {
         std::string uniqueName = baseName;
         int counter = 2;
         bool exists = true;
         while (exists) {
             exists = false;
             for (auto const& ghost : m_activeGhosts) {
+                if (!ignoreFilename.empty() && ghost.filename == ignoreFilename) continue;
                 if (ghost.name == uniqueName) {
                     uniqueName = baseName + " (" + std::to_string(counter) + ")";
                     counter++;
@@ -179,22 +182,22 @@ public:
 };
 
 // ==========================================
-// 💬 DIALOG INTERFACE POPUPS (BACK TO COCOS)
+// 💬 DIALOG INTERFACE POPUPS
 // ==========================================
-// FIXED: Reverted entirely back to FLAlertLayer & FLAlertLayerProtocol to match Geode 5.7.1 SDK limits perfectly
 class GhostNameDialog : public FLAlertLayer, public FLAlertLayerProtocol {
 protected:
     int m_levelID;
     bool m_isRenameMode;
     size_t m_editIndex;
     geode::TextInput* m_inputField = nullptr;
+    GhostPopup* m_parentPopup = nullptr; 
 
-    bool init(int levelID, bool isRenameMode, size_t editIndex);
+    bool init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup);
 
 public:
-    static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0) {
+    static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0, GhostPopup* parentPopup = nullptr) {
         auto ret = new GhostNameDialog();
-        if (ret && ret->init(levelID, isRenameMode, editIndex)) {
+        if (ret && ret->init(levelID, isRenameMode, editIndex, parentPopup)) {
             ret->autorelease();
             return ret;
         }
@@ -202,7 +205,6 @@ public:
         return nullptr;
     }
 
-    // NATIVE HOOK: Standard RobTop confirmation protocol click handler
     void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override;
 };
 // ==========================================
@@ -231,28 +233,6 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             this->addChild(ghostSprite, 9999);
         }
         return ghostSprite;
-    }
-
-    void updateGhostVisibility(std::string const& filename, bool enabled) {
-        auto it = m_fields->m_ghostSprites.find(filename);
-        if (it != m_fields->m_ghostSprites.end() && it->second) {
-            it->second->setVisible(enabled);
-        }
-    }
-
-    void removeGhostSprite(std::string const& filename) {
-        auto it = m_fields->m_ghostSprites.find(filename);
-        if (it != m_fields->m_ghostSprites.end()) {
-            if (it->second) it->second->removeFromParentAndCleanup(true);
-            m_fields->m_ghostSprites.erase(it);
-        }
-    }
-
-    void syncGhostSpriteColor(std::string const& filename, ccColor3B color) {
-        auto it = m_fields->m_ghostSprites.find(filename);
-        if (it != m_fields->m_ghostSprites.end() && it->second) {
-            it->second->setColor(color);
-        }
     }
 
     void initializeRenderPool() {
@@ -284,6 +264,12 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         return true;
     }
 
+    // FIXED: Added an exit hook override to wipe tracking metrics so states never spill into separate levels
+    void onExit() {
+        PlayLayer::onExit();
+        GhostManager::get()->clearVolatileBuffers();
+    }
+
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         PlayLayer::processCommands(dt, isHalfTick, isLastTick);
         if (!m_player1) return;
@@ -310,7 +296,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             }
         }
 
-        if (GhostManager::get()->isRecording()) {
+        if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             GhostManager::get()->getRecordingBuffer().push_back({
                 m_fields->m_physicsTicks,
                 m_player1->getPositionX(),
@@ -368,19 +354,14 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
     }
 
-    void registerDynamicRecordSprite(std::string const& filename, ccColor3B color) {
-        auto sprite = createGhostSprite(color);
-        if (sprite) {
-            sprite->setVisible(true);
-            m_fields->m_ghostSprites[filename] = sprite;
-        }
-    }
-
     void executeUnifiedSaveFlow() {
         if (GhostManager::get()->isRecording() && !m_fields->m_saveFlowTriggered) {
             m_fields->m_saveFlowTriggered = true; 
+
             auto popup = GhostNameDialog::create(m_level->m_levelID, false);
-            if (popup) popup->show();
+            if (popup) {
+                popup->show();
+            }
         }
     }
 
@@ -406,10 +387,17 @@ struct $modify(GhostPlayLayer, PlayLayer) {
 };
 
 // ==========================================
-// 💬 FLALERTLAYER MEMORY & EXECUTION FLOWS
+// 💬 DATA WRITING UTILITIES
 // ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     auto& buffer = GhostManager::get()->getRecordingBuffer();
+
+    // FIXED: Added ChatGPT's debug notification hook to expose exactly how many vectors were logged
+    Notification::create(
+        fmt::format("Saving Route... Frames Captured: {}", buffer.size()),
+        NotificationIcon::Info
+    )->show();
+
     if (buffer.empty()) return;
 
     auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
@@ -442,7 +430,7 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     file.close();
 
     RuntimeGhost newGhost;
-    newGhost.name = GhostManager::get()->getUniqueRouteName(finalName);
+    newGhost.name = GhostManager::get()->getUniqueRouteName(finalName, filename);
     newGhost.color = {0, 255, 255};
     newGhost.isEnabled = true;
     newGhost.filename = filename;
@@ -452,15 +440,14 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     GhostManager::get()->saveMetadataFile(levelID);
 
     if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-        pl->registerDynamicRecordSprite(filename, newGhost.color);
+        pl->initializeRenderPool();
     }
 
     GhostManager::get()->clearVolatileBuffers();
     Notification::create("Route Saved Flawlessly!", NotificationIcon::Success)->show();
 }
 
-// FIXED: Converted setup to standard FLAlertLayer custom container layout initializing methods
-bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex) {
+bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup) {
     if (!FLAlertLayer::init(this, isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", 320.f, false, 140.f, 0.8f)) {
         return false;
     }
@@ -468,11 +455,12 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex) {
     m_levelID = levelID;
     m_isRenameMode = isRenameMode;
     m_editIndex = editIndex;
+    m_parentPopup = parentPopup;
 
-    auto winSize = CCDirector::sharedDirector()->getWinSize();
+    auto boxSize = m_mainLayer->getContentSize();
 
     m_inputField = geode::TextInput::create(220.f, "Route Name...", "chatFont.fnt");
-    m_inputField->setPosition({ winSize.width / 2, winSize.height / 2 + 10.f });
+    m_inputField->setPosition({ boxSize.width / 2, boxSize.height / 2 + 10.f });
     m_inputField->setMaxCharCount(22);
     m_inputField->setFilter("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ ");
 
@@ -486,7 +474,6 @@ bool GhostNameDialog::init(int levelID, bool isRenameMode, size_t editIndex) {
     return true;
 }
 
-// FIXED: Replaced manual click triggers with RobTop's unified modal state loop
 void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
     if (secondButton) { 
         std::string textResult = m_inputField->getString();
@@ -494,18 +481,23 @@ void GhostNameDialog::FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) {
 
         if (m_isRenameMode) {
             if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-                GhostManager::get()->getActiveGhosts()[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult);
+                auto& targets = GhostManager::get()->getActiveGhosts();
+                targets[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult, targets[m_editIndex].filename);
                 GhostManager::get()->saveMetadataFile(m_levelID);
             }
         } else {
             commitGhostToDiskAndMemory(m_levelID, textResult);
         }
     } else { 
+        // FIXED: Allows mid-level manual save cancels to release the lock cleanly so users can safely unpause and keep recording
         if (!m_isRenameMode) {
-            GhostManager::get()->clearVolatileBuffers();
+            if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+                pl->m_fields->m_saveFlowTriggered = false;
+            } else {
+                GhostManager::get()->clearVolatileBuffers();
+            }
         }
     }
-    // RobTop's base code automatically handles dismissing and touch unregistering now!
 }
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
@@ -535,7 +527,7 @@ public:
             GhostManager::get()->saveMetadataFile(m_levelID);
 
             if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-                pl->syncGhostSpriteColor(ghostsRef[m_colorEditIdx].filename, color);
+                pl->initializeRenderPool();
             }
             this->refreshGhostListUI();
         }
@@ -610,7 +602,6 @@ public:
         m_listMenu = CCMenu::create();
         m_listMenu->setPosition({winSize.width / 2, winSize.height / 2 + 20.f});
         
-        // CRITICAL TOUCH FIX: Overrides the background layer block so items are perfectly click-responsive!
         m_listMenu->setTouchPriority(-141); 
         m_mainLayer->addChild(m_listMenu);
 
@@ -629,12 +620,22 @@ public:
     }
 
     void onInitiateRecordAction(CCObject*) {
-        Notification::create("Recording Initialized!", NotificationIcon::Success)->show();
-
-        GhostManager::get()->setRecording(true);
-        GhostManager::get()->getRecordingBuffer().clear();
-
         if (auto pl = PlayLayer::get()) {
+            Notification::create("Recording Initialized!", NotificationIcon::Success)->show();
+
+            GhostManager::get()->setRecording(true);
+            GhostManager::get()->getRecordingBuffer().clear();
+
+            if (!pl->m_isPracticeMode) {
+                pl->togglePracticeMode(true);
+            }
+
+            if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
+                gpl->m_fields->m_saveFlowTriggered = false;
+                gpl->m_fields->m_physicsTicks = 0;
+                gpl->m_fields->m_checkpointTicks.clear();
+            }
+
             pl->resetLevel();
             this->keyBackClicked();
         }
@@ -650,7 +651,7 @@ public:
         GhostManager::get()->saveMetadataFile(m_levelID);
 
         if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-            pl->updateGhostVisibility(ghosts[idx].filename, ghosts[idx].isEnabled);
+            pl->initializeRenderPool();
         }
         this->refreshGhostListUI();
     }
@@ -673,9 +674,14 @@ public:
         size_t idx = static_cast<size_t>(sender->getTag());
         if (idx >= GhostManager::get()->getActiveGhosts().size()) return;
 
-        auto inputPopup = GhostNameDialog::create(m_levelID, true, idx);
-        inputPopup->show();
-        this->keyBackClicked();
+        auto inputPopup = GhostNameDialog::create(m_levelID, true, idx, this);
+        if (inputPopup) {
+            inputPopup->show();
+        }
+    }
+
+    void FLAlert_Clicked(FLAlertLayer* layer, bool secondButton) override {
+        this->refreshGhostListUI();
     }
 
     void onDeleteProfileRecord(CCObject* sender) {
@@ -697,15 +703,15 @@ public:
             GhostManager::get()->saveMetadataFile(m_levelID);
 
             if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
-                pl->removeGhostSprite(targetFilename);
+                pl->initializeRenderPool();
             }
         }
         this->refreshGhostListUI();
     }
 
-    void FLAlert_Clicked(FLAlertLayer*, bool) override {}
     static void open(int levelID) {
-        if (auto p = GhostPopup::create(levelID)) p->show();
+        auto p = GhostPopup::create(levelID);
+        if (p) p->show();
     }
 };
 
@@ -747,10 +753,12 @@ struct $modify(MyPauseLayer, PauseLayer) {
         }
     }
 
+    // FIXED: Handed off the modal execution to executeUnifiedSaveFlow directly instead of locking the tracking flags manually
     void onManualSaveOverrideAction(CCObject*) {
         if (auto pl = PlayLayer::get()) {
-            auto dialog = GhostNameDialog::create(pl->m_level->m_levelID, false);
-            dialog->show();
+            if (auto gpl = static_cast<GhostPlayLayer*>(pl)) {
+                gpl->executeUnifiedSaveFlow();
+            }
             this->keyBackClicked();
         }
     }
