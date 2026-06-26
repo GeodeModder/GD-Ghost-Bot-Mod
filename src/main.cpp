@@ -3,6 +3,8 @@
 #include <Geode/modify/PauseLayer.hpp>
 #include <Geode/ui/ColorPickPopup.hpp>
 #include <Geode/binding/SimplePlayer.hpp>
+#include <Geode/ui/Popup.hpp>       // FIXED: Added for modern watertight touch isolation
+#include <Geode/ui/TextInput.hpp>   // FIXED: Added for modern synced text input processing
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -90,7 +92,7 @@ public:
             ghostObj["enabled"] = g.isEnabled;
             ghostObj["filename"] = g.filename;
             ghostObj["lookahead_ticks"] = static_cast<int>(g.lookAheadTicks);
-            
+
             auto colArr = matjson::Value::array();
             colArr.push(static_cast<int>(g.color.r));
             colArr.push(static_cast<int>(g.color.g));
@@ -176,53 +178,33 @@ public:
         }
     }
 };
+
 // ==========================================
-// 💬 DIALOG INTERFACE POPUPS
+// 💬 DIALOG INTERFACE POPUPS (MODERNIZED)
 // ==========================================
-class GhostNameDialog : public FLAlertLayer, public TextInputDelegate, public FLAlertLayerProtocol {
-private:
+// REFACTORED: Inherits from geode::Popup to enforce watertight touch mechanics
+class GhostNameDialog : public geode::Popup<int, bool, size_t> {
+protected:
     int m_levelID;
-    size_t m_editIndex;
     bool m_isRenameMode;
-    TextInput* m_inputField = nullptr;
+    size_t m_editIndex;
+    geode::TextInput* m_inputField = nullptr;
+
+    bool setup(int levelID, bool isRenameMode, size_t editIndex) override;
+    void onConfirm(cocos2d::CCObject* sender);
+    void onCancel(cocos2d::CCObject* sender);
 
 public:
     static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0) {
         auto ret = new GhostNameDialog();
-        ret->m_levelID = levelID;
-        ret->m_isRenameMode = isRenameMode;
-        ret->m_editIndex = editIndex;
-        if (ret && ret->init()) {
+        if (ret && ret->initAnchored(320.f, 160.f, levelID, isRenameMode, editIndex)) {
             ret->autorelease();
             return ret;
         }
         CC_SAFE_DELETE(ret);
         return nullptr;
     }
-
-    bool init() override {
-        float width = 320.f;
-        float height = 160.f;
-        if (!FLAlertLayer::init(this, m_isRenameMode ? "Rename Route" : "Save Route", "", "Cancel", "Confirm", width, false, height, 1.f)) return false;
-
-        auto winSize = CCDirector::sharedDirector()->getWinSize();
-        m_inputField = TextInput::create(220.f, "Route Name...");
-        m_inputField->setPosition({winSize.width / 2, winSize.height / 2 + 10.f});
-        m_inputField->setDelegate(this);
-        
-        if (m_isRenameMode && m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-            m_inputField->setString(GhostManager::get()->getActiveGhosts()[m_editIndex].name);
-        } else {
-            m_inputField->setString(GhostManager::get()->getRecordingName().empty() ? "New Route" : GhostManager::get()->getRecordingName());
-        }
-        
-        m_mainLayer->addChild(m_inputField);
-        return true;
-    }
-
-    void FLAlert_Clicked(FLAlertLayer*, bool btn2) override;
 };
-
 // ==========================================
 // 🕹️ DECOUPLED SIMULATION ENGINE HOOK MATRIX
 // ==========================================
@@ -238,9 +220,8 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     SimplePlayer* createGhostSprite(ccColor3B routeColor) {
         auto ghostSprite = SimplePlayer::create(0);
         auto playerFrame = GameManager::sharedState()->getPlayerFrame();
-        
+
         if (ghostSprite) {
-            // FIXED: Added IconType::Cube to satisfy Geode 5.7.1 API signature requirements
             ghostSprite->updatePlayerFrame(playerFrame, IconType::Cube);
             ghostSprite->setColor(routeColor);
             ghostSprite->setSecondColor(GameManager::sharedState()->colorForIdx(GameManager::sharedState()->getPlayerColor2()));
@@ -316,7 +297,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             m_fields->m_wasDeadLastFrame = false;
             if (!m_fields->m_checkpointTicks.empty()) {
                 m_fields->m_physicsTicks = m_fields->m_checkpointTicks.back(); 
-                
+
                 if (GhostManager::get()->isRecording()) {
                     auto& buffer = GhostManager::get()->getRecordingBuffer();
                     buffer.erase(std::remove_if(buffer.begin(), buffer.end(), [this](GhostFrame const& f) {
@@ -354,14 +335,14 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             auto ghostSprite = it->second;
 
             uint32_t targetTick = m_fields->m_physicsTicks + ghostData.lookAheadTicks;
-            
+
             auto itb = std::lower_bound(ghostData.frames.begin(), ghostData.frames.end(), targetTick, [](GhostFrame const& frame, uint32_t target) {
                 return frame.tick < target;
             });
 
             if (itb != ghostData.frames.end() && itb != ghostData.frames.begin()) {
                 auto ita = itb - 1;
-                
+
                 float tickDelta = static_cast<float>(itb->tick - ita->tick);
                 float pct = (tickDelta > 0.f) ? static_cast<float>(targetTick - ita->tick) / tickDelta : 0.f;
 
@@ -424,7 +405,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     }
 };
 
- // ==========================================
+// ==========================================
 // 💬 POST-DIALOG DECLARATION ATTACHMENTS
 // ==========================================
 void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
@@ -466,10 +447,10 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     newGhost.isEnabled = true;
     newGhost.filename = filename;
     newGhost.frames = buffer;
-    
+
     GhostManager::get()->getActiveGhosts().push_back(newGhost);
     GhostManager::get()->saveMetadataFile(levelID);
-    
+
     if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
         pl->registerDynamicRecordSprite(filename, newGhost.color);
     }
@@ -478,25 +459,60 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
     Notification::create("Route Saved Flawlessly!", NotificationIcon::Success)->show();
 }
 
-void GhostNameDialog::FLAlert_Clicked(FLAlertLayer*, bool btn2) {
-    if (btn2) {
-        std::string textResult = m_inputField->getString();
-        if (textResult.empty()) textResult = "Unnamed Route";
+bool GhostNameDialog::setup(int levelID, bool isRenameMode, size_t editIndex) {
+    m_levelID = levelID;
+    m_isRenameMode = isRenameMode;
+    m_editIndex = editIndex;
 
-        if (m_isRenameMode) {
-            if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
-                GhostManager::get()->getActiveGhosts()[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult);
-                GhostManager::get()->saveMetadataFile(m_levelID);
-            }
-        } else {
-            commitGhostToDiskAndMemory(m_levelID, textResult);
-        }
+    this->setTitle(m_isRenameMode ? "Rename Route" : "Save Route", "bigFont.fnt", 0.7f);
+
+    m_inputField = geode::TextInput::create(220.f, "Route Name...", "chatFont.fnt");
+    m_inputField->setPosition({ m_size.width / 2, m_size.height / 2 + 15.f });
+    m_inputField->setMaxCharCount(22);
+    m_inputField->setFilter("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_ ");
+
+    if (m_isRenameMode && m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
+        m_inputField->setString(GhostManager::get()->getActiveGhosts()[m_editIndex].name);
     } else {
-        GhostManager::get()->clearVolatileBuffers();
+        m_inputField->setString(GhostManager::get()->getRecordingName().empty() ? "New Route" : GhostManager::get()->getRecordingName());
     }
-    this->keyBackClicked();
+    m_mainLayer->addChild(m_inputField);
+
+    auto cancelBtnSprite = ButtonSprite::create("Cancel", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+    auto cancelBtn = CCMenuItemSpriteExtra::create(cancelBtnSprite, this, menu_selector(GhostNameDialog::onCancel));
+    cancelBtn->setPosition({ m_size.width / 2 - 65.f, m_size.height / 2 - 40.f });
+
+    auto confirmBtnSprite = ButtonSprite::create("Confirm", "goldFont.fnt", "GJ_button_01.png", 0.8f);
+    auto confirmBtn = CCMenuItemSpriteExtra::create(confirmBtnSprite, this, menu_selector(GhostNameDialog::onConfirm));
+    confirmBtn->setPosition({ m_size.width / 2 + 65.f, m_size.height / 2 - 40.f });
+
+    m_buttonMenu->addChild(cancelBtn);
+    m_buttonMenu->addChild(confirmBtn);
+
+    return true;
 }
 
+void GhostNameDialog::onConfirm(cocos2d::CCObject* sender) {
+    std::string textResult = m_inputField->getString();
+    if (textResult.empty()) textResult = m_isRenameMode ? "Unnamed Route" : "New Route";
+
+    if (m_isRenameMode) {
+        if (m_editIndex < GhostManager::get()->getActiveGhosts().size()) {
+            GhostManager::get()->getActiveGhosts()[m_editIndex].name = GhostManager::get()->getUniqueRouteName(textResult);
+            GhostManager::get()->saveMetadataFile(m_levelID);
+        }
+    } else {
+        commitGhostToDiskAndMemory(m_levelID, textResult);
+    }
+    this->onClose(sender);
+}
+
+void GhostNameDialog::onCancel(cocos2d::CCObject* sender) {
+    if (!m_isRenameMode) {
+        GhostManager::get()->clearVolatileBuffers();
+    }
+    this->onClose(sender);
+}
 // ==========================================
 // 🎛️ SYSTEM DASHBOARD POPUP INTERFACE
 // ==========================================
@@ -523,7 +539,7 @@ public:
         if (m_colorEditIdx < ghostsRef.size()) {
             ghostsRef[m_colorEditIdx].color = color;
             GhostManager::get()->saveMetadataFile(m_levelID);
-            
+
             if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
                 pl->syncGhostSpriteColor(ghostsRef[m_colorEditIdx].filename, color);
             }
@@ -603,14 +619,10 @@ public:
 
         this->refreshGhostListUI();
 
-        // FIXED: Ditched custom bottomMenu entirely to resolve touch priority blocking.
-        // We inject our button straight into the alert's native, interactive m_buttonMenu.
         if (m_buttonMenu) {
             auto recBtnSprite = ButtonSprite::create("Record New Route", "goldFont.fnt", "GJ_button_01.png");
             if (recBtnSprite) {
                 auto recBtn = CCMenuItemSpriteExtra::create(recBtnSprite, this, menu_selector(GhostPopup::onInitiateRecordAction));
-                
-                // FIXED: Stacked perfectly at -45.f relative to menu center (safely above the Close button)
                 recBtn->setPosition({0.f, -45.f});
                 m_buttonMenu->addChild(recBtn);
             }
@@ -619,10 +631,9 @@ public:
         return true;
     }
 
-    // FIXED & VERIFIED ACTION: Triggers system logging, shows notice toast, and fires game engine reset
     void onInitiateRecordAction(CCObject*) {
         Notification::create("Recording Initialized!", NotificationIcon::Success)->show();
-        
+
         GhostManager::get()->setRecording(true);
         GhostManager::get()->getRecordingBuffer().clear();
 
@@ -653,7 +664,7 @@ public:
         if (idx >= ghosts.size()) return;
 
         m_colorEditIdx = idx;
-        
+
         auto popup = ColorPickPopup::create(ghosts[idx].color);
         popup->setCallback([this](cocos2d::ccColor4B color) {
             this->updateColorValue({color.r, color.g, color.b});
@@ -687,7 +698,7 @@ public:
         if (!ec) {
             ghosts.erase(ghosts.begin() + idx);
             GhostManager::get()->saveMetadataFile(m_levelID);
-            
+
             if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
                 pl->removeGhostSprite(targetFilename);
             }
@@ -707,7 +718,7 @@ public:
 struct $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
-        
+
         auto menu = this->getChildByType<CCMenu>(0); 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
 
