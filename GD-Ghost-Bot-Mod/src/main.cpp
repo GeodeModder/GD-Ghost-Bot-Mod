@@ -194,6 +194,14 @@ protected:
 
     bool init(int levelID, bool isRenameMode, size_t editIndex, GhostPopup* parentPopup);
 
+    // Override touch registration to ensure this dialog always intercepts
+    // touches before the level-complete end screen (which registers at a
+    // high priority and would otherwise steal our button taps).
+    void registerWithTouchDispatcher() override {
+        cocos2d::CCDirector::sharedDirector()->getTouchDispatcher()
+            ->addTargetedDelegate(this, -500, true);
+    }
+
 public:
     static GhostNameDialog* create(int levelID, bool isRenameMode, size_t editIndex = 0, GhostPopup* parentPopup = nullptr) {
         auto ret = new GhostNameDialog();
@@ -313,6 +321,17 @@ struct $modify(GhostPlayLayer, PlayLayer) {
                 m_player1->getPositionY(),
                 m_player1->getRotation()
             });
+
+            // Milestone notifications — visible proof that frames are being
+            // captured mid-run without needing the Geode log. If you never see
+            // the "1 frame" notification, update() isn't recording at all.
+            auto sz = GhostManager::get()->getRecordingBuffer().size();
+            if (sz == 1 || sz == 60 || sz == 300) {
+                Notification::create(
+                    fmt::format("Recording: {} frames captured", sz),
+                    NotificationIcon::Info
+                )->show();
+            }
         }
 
         // Ghost playback
