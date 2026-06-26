@@ -369,6 +369,13 @@ struct $modify(GhostPlayLayer, PlayLayer) {
             && !m_fields->m_isResetting) {
             m_fields->m_saveFlowTriggered = true;
 
+            // Visible confirmation of how many frames were captured — helps
+            // diagnose any remaining buffer-wipe issues without needing the log.
+            Notification::create(
+                fmt::format("Level complete! {} frames captured.", GhostManager::get()->getRecordingBuffer().size()),
+                NotificationIcon::Info
+            )->show();
+
             auto popup = GhostNameDialog::create(m_level->m_levelID, false);
             if (popup) {
                 popup->show();
@@ -661,19 +668,30 @@ public:
         if (gpl) gpl->m_fields->m_isResetting = true;
 
         if (!pl->m_isPracticeMode) {
+            // togglePracticeMode(true) already calls resetLevel() internally
+            // in GD 2.2081 — do NOT call resetLevel() again after this or the
+            // player can land in a transient dead/spawn state on the first update.
             pl->togglePracticeMode(true);
-            // In GD 2.2081 togglePracticeMode calls resetLevel internally.
+        } else {
+            // Already in practice mode — need a manual reset.
+            pl->resetLevel();
         }
-        pl->resetLevel();
 
         // Override any field state the internal resets may have written.
         // This must happen AFTER all resets — that's the whole point of Bug 1.
+        // NOTE: m_wasDeadLastFrame MUST also be cleared here. If the player
+        // was dead before pausing, it will be true, and the very first update()
+        // after resume will hit the "respawn with no checkpoints" branch and
+        // wipe the buffer even though we just started recording.
         if (gpl) {
             gpl->m_fields->m_isResetting      = false;
             gpl->m_fields->m_saveFlowTriggered = false; // critical — keeps frame capture open
             gpl->m_fields->m_physicsTicks      = 0;
             gpl->m_fields->m_checkpointTicks.clear();
+            gpl->m_fields->m_wasDeadLastFrame  = false; // prevent buffer-wipe on first live frame
         }
+
+        Notification::create("Recording started! Play to the end to save.", NotificationIcon::Success)->show();
 
         // Close GhostPopup last. At this point game state is fully prepared,
         // so when the user dismisses the PauseLayer the scheduler resumes and
