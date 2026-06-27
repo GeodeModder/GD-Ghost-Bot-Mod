@@ -217,6 +217,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         // Guards against playEndAnimationToPos firing spuriously during
         // togglePracticeMode / resetLevel inside onInitiateRecordAction.
         bool m_isResetting = false;
+        bool m_recordStartPending = false;
         std::unordered_map<std::string, SimplePlayer*> m_ghostSprites; 
     };
 
@@ -260,6 +261,7 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         m_fields->m_wasDeadLastFrame = false;
         m_fields->m_saveFlowTriggered = false;
         m_fields->m_isResetting = false;
+        m_fields->m_recordStartPending = false;
 
         GhostManager::get()->loadMacroFramework(level->m_levelID);
         initializeRenderPool();
@@ -269,6 +271,16 @@ struct $modify(GhostPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
         if (!m_player1) return;
+
+        if (m_fields->m_recordStartPending) {
+            m_fields->m_recordStartPending = false;
+            m_fields->m_isResetting = false;
+            m_fields->m_saveFlowTriggered = false;
+            m_fields->m_physicsTicks = 0;
+            m_fields->m_checkpointTicks.clear();
+            m_fields->m_wasDeadLastFrame = false;
+            GhostManager::get()->getRecordingBuffer().clear();
+        }
 
         // Throttled debug log (fires every 60 frames)
         static int logThrottle = 0;
@@ -416,7 +428,16 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
         NotificationIcon::Info
     )->show();
 
-    if (buffer.empty()) return;
+    if (buffer.empty()) {
+        GhostManager::get()->clearVolatileBuffers();
+        if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+            pl->m_fields->m_saveFlowTriggered = false;
+            pl->m_fields->m_isResetting = false;
+            pl->m_fields->m_recordStartPending = false;
+        }
+        Notification::create("No frames were recorded. Route was not saved.", NotificationIcon::Error)->show();
+        return;
+    }
 
     auto dir = Mod::get()->getSaveDir() / std::to_string(levelID);
     std::filesystem::create_directories(dir);
@@ -684,11 +705,12 @@ public:
         // after resume will hit the "respawn with no checkpoints" branch and
         // wipe the buffer even though we just started recording.
         if (gpl) {
-            gpl->m_fields->m_isResetting      = false;
+            gpl->m_fields->m_isResetting      = true;
             gpl->m_fields->m_saveFlowTriggered = false; // critical — keeps frame capture open
             gpl->m_fields->m_physicsTicks      = 0;
             gpl->m_fields->m_checkpointTicks.clear();
             gpl->m_fields->m_wasDeadLastFrame  = false; // prevent buffer-wipe on first live frame
+            gpl->m_fields->m_recordStartPending = true;
         }
 
         Notification::create("Recording started! Play to the end to save.", NotificationIcon::Success)->show();
