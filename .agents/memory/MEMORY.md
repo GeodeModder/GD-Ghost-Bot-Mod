@@ -1,0 +1,2 @@
+- [Project layout moved](project-layout.md) — `GD-Ghost-Bot-Mod/src/main.cpp` no longer exists; source is now at repo-root `src/main.cpp`.
+- [One-shot startup guard lifecycle](startup-guard-lifecycle.md) — guards like `m_justStartedRecording` must be cleared on the first stable frame, not only inside the respawn branch, or they suppress legitimate later respawn logic.
