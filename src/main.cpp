@@ -494,7 +494,14 @@ void commitGhostToDiskAndMemory(int levelID, std::string const& finalName) {
 
     std::ofstream file(macroPath);
     if (file.fail()) {
-        Notification::create("Failed to write macro data file!", NotificationIcon::Error)->show();
+        // Must clear recording state here too — leaving isRecording=true and
+        // saveFlowTriggered=true would permanently wedge the save flow.
+        GhostManager::get()->clearVolatileBuffers();
+        if (auto pl = static_cast<GhostPlayLayer*>(PlayLayer::get())) {
+            pl->m_fields->m_saveFlowTriggered = false;
+            pl->m_fields->m_isResetting = false;
+        }
+        Notification::create("Failed to write route file! (disk full?)", NotificationIcon::Error)->show();
         return;
     }
     file << root.dump(matjson::NO_INDENTATION);
