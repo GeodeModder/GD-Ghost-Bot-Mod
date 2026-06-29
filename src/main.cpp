@@ -393,6 +393,16 @@ struct $modify(GhostPlayLayer, PlayLayer) {
         }
 
         m_fields->m_physicsTicks++;
+
+        // First tick complete — safe to allow save flow now. Any deferred
+        // playEndAnimationToPos calls from togglePracticeMode/resetLevel fire
+        // before update() ever runs (scheduler, still paused), so they are all
+        // blocked by m_isResetting=true above. Clearing here means legitimate
+        // end-of-run completion (which fires from within PlayLayer::update on a
+        // later tick) will pass through normally.
+        if (m_fields->m_physicsTicks == 1 && m_fields->m_isResetting) {
+            m_fields->m_isResetting = false;
+        }
     }
 
     void executeUnifiedSaveFlow() {
@@ -722,14 +732,20 @@ public:
 
         // Re-fetch PlayLayer after the reset — togglePracticeMode can recreate
         // the PlayLayer node entirely, making the original `gpl` pointer stale.
-        // Using PlayLayer::get() here always gives us the live instance.
+        // IMPORTANT: m_isResetting stays TRUE here. GD can schedule a deferred
+        // playEndAnimationToPos call that fires on the next scheduler tick
+        // (even while the PauseLayer is still open). If we cleared isResetting
+        // now, that deferred call would race through executeUnifiedSaveFlow with
+        // 0 frames and set saveFlowTriggered=true before the player even moves.
+        // Instead we clear isResetting in update() after the first physics tick
+        // completes — update() only runs once the game is truly unpaused.
         if (auto freshPl = PlayLayer::get()) {
             auto freshGpl = static_cast<GhostPlayLayer*>(freshPl);
-            freshGpl->m_fields->m_isResetting       = false; // allow save flow
+            freshGpl->m_fields->m_isResetting        = true; // cleared in update() tick 1
             freshGpl->m_fields->m_saveFlowTriggered  = false;
-            freshGpl->m_fields->m_physicsTicks       = 0;
+            freshGpl->m_fields->m_physicsTicks        = 0;
             freshGpl->m_fields->m_checkpointTicks.clear();
-            freshGpl->m_fields->m_wasDeadLastFrame   = false;
+            freshGpl->m_fields->m_wasDeadLastFrame    = false;
             freshGpl->m_fields->m_justStartedRecording = true;
         }
 
