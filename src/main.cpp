@@ -4,6 +4,7 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <sstream>
 
 using namespace geode::prelude;
 
@@ -23,55 +24,66 @@ class $modify(MyPlayLayer, PlayLayer) {
         size_t m_currentFrameIndex = 0;
         cocos2d::CCSprite* m_ghostSprite = nullptr;
         bool m_hasGhost = false;
+        bool m_isRecording = false;
+        bool m_saveRequested = false;
     };
 
     // 1. Initialize and try to load existing ghost data
     bool init(GJGameLevel* level) {
         if (!PlayLayer::init(level)) return false;
 
-        m_fields->m_recordedFrames.clear();
-        m_fields->m_checkpointFrameCounts.clear();
-        m_fields->m_playbackFrames.clear();
-        m_fields->m_currentFrameIndex = 0;
+        auto fields = m_fields;
+        fields->m_recordedFrames.clear();
+        fields->m_checkpointFrameCounts.clear();
+        fields->m_playbackFrames.clear();
+        fields->m_currentFrameIndex = 0;
+        fields->m_ghostSprite = nullptr;
+        fields->m_hasGhost = false;
+        fields->m_isRecording = false;
+        fields->m_saveRequested = false;
 
         // Load ghost file if it exists
-        int levelID = level->m_levelID;
-        auto savePath = Mod::get()->getModSettingSaveDir() / (std::to_string(levelID) + ".json");
-        
-        if (std::filesystem::exists(savePath)) {
-            std::ifstream file(savePath);
-            if (file.is_open()) {
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                file.close();
+        int levelID = level ? level->m_levelID : -1;
+        auto saveDir = Mod::get()->getModSettingSaveDir();
+        std::filesystem::create_directories(saveDir);
 
-                auto parseResult = matjson::parse(buffer.str());
-                if (parseResult.has_value() && parseResult.value().contains("frames")) {
-                    auto framesArray = parseResult.value()["frames"].as_array();
-                    for (const auto& f : framesArray) {
-                        GhostFrame frame;
-                        frame.x = f["x"].as_double();
-                        frame.y = f["y"].as_double();
-                        frame.rotation = f["rotation"].as_double();
-                        m_fields->m_playbackFrames.push_back(frame);
+        if (levelID >= 0) {
+            auto savePath = saveDir / (std::to_string(levelID) + ".json");
+
+            if (std::filesystem::exists(savePath)) {
+                std::ifstream file(savePath);
+                if (file.is_open()) {
+                    std::stringstream buffer;
+                    buffer << file.rdbuf();
+                    file.close();
+
+                    auto parseResult = matjson::parse(buffer.str());
+                    if (parseResult.has_value() && parseResult.value().contains("frames")) {
+                        auto framesArray = parseResult.value()["frames"].as_array();
+                        for (const auto& f : framesArray) {
+                            GhostFrame frame;
+                            frame.x = f["x"].as_double();
+                            frame.y = f["y"].as_double();
+                            frame.rotation = f["rotation"].as_double();
+                            fields->m_playbackFrames.push_back(frame);
+                        }
+                        fields->m_hasGhost = !fields->m_playbackFrames.empty();
                     }
-                    m_fields->m_hasGhost = !m_fields->m_playbackFrames.empty();
                 }
             }
         }
 
-        // Setup the physical Ghost Sprite if playback data exists
-        if (m_fields->m_hasGhost) {
-            m_fields->m_ghostSprite = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
-            if (m_fields->m_ghostSprite) {
-                // Fetch saved color preference (defaults to cyan/white mixed)
+        // Setup the physical ghost sprite if playback data exists
+        if (fields->m_hasGhost) {
+            fields->m_ghostSprite = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
+            if (fields->m_ghostSprite) {
                 int r = Mod::get()->getSavedValue<int>("color_r_" + std::to_string(levelID), 0);
                 int g = Mod::get()->getSavedValue<int>("color_g_" + std::to_string(levelID), 255);
                 int b = Mod::get()->getSavedValue<int>("color_b_" + std::to_string(levelID), 255);
-                
-                m_fields->m_ghostSprite->setColor({static_cast<GLubyte>(r), static_cast<GLubyte>(g), static_cast<GLubyte>(b)});
-                m_fields->m_ghostSprite->setOpacity(150); // Make it slightly transparent
-                m_objectLayer->addChild(m_fields->m_ghostSprite);
+
+                fields->m_ghostSprite->setColor({static_cast<GLubyte>(r), static_cast<GLubyte>(g), static_cast<GLubyte>(b)});
+                fields->m_ghostSprite->setOpacity(150);
+                m_objectLayer->addChild(fields->m_ghostSprite);
             }
         }
 
@@ -82,99 +94,122 @@ class $modify(MyPlayLayer, PlayLayer) {
     void update(float dt) {
         PlayLayer::update(dt);
 
-        // RECORDING SYSTEM
-        if (this->m_isPracticeMode && this->m_player1) {
+        auto fields = m_fields;
+
+        // Recording is enabled while practice mode is active.
+        // If you later add a "Record New Route" button, set fields->m_isRecording = true there.
+        fields->m_isRecording = this->m_isPracticeMode;
+
+        // Record current frame
+        if (fields->m_isRecording && this->m_player1) {
             GhostFrame currentFrame = {
                 this->m_player1->m_position.x,
                 this->m_player1->m_position.y,
                 this->m_player1->getRotation()
             };
-            m_fields->m_recordedFrames.push_back(currentFrame);
+            fields->m_recordedFrames.push_back(currentFrame);
         }
 
-        // PLAYBACK SYSTEM
-        if (m_fields->m_hasGhost && m_fields->m_ghostSprite) {
-            if (m_fields->m_currentFrameIndex < m_fields->m_playbackFrames.size()) {
-                auto& frame = m_fields->m_playbackFrames[m_fields->m_currentFrameIndex];
-                m_fields->m_ghostSprite->setPosition({frame.x, frame.y});
-                m_fields->m_ghostSprite->setRotation(frame.rotation);
-                m_fields->m_currentFrameIndex++;
+        // Playback system
+        if (fields->m_hasGhost && fields->m_ghostSprite) {
+            if (fields->m_currentFrameIndex < fields->m_playbackFrames.size()) {
+                auto& frame = fields->m_playbackFrames[fields->m_currentFrameIndex];
+                fields->m_ghostSprite->setPosition({frame.x, frame.y});
+                fields->m_ghostSprite->setRotation(frame.rotation);
+                fields->m_currentFrameIndex++;
             } else {
-                m_fields->m_ghostSprite->setVisible(false); // Hide if macro ends early
+                fields->m_ghostSprite->setVisible(false);
             }
         }
     }
+
+    void saveGhostToDisk() {
+        auto fields = m_fields;
+
+        if (!fields->m_isRecording || fields->m_saveRequested || fields->m_recordedFrames.empty()) {
+            return;
+        }
+
+        int levelID = this->m_level ? this->m_level->m_levelID : -1;
+        if (levelID < 0) {
+            return;
+        }
+
+        fields->m_saveRequested = true;
+
+        auto saveDir = Mod::get()->getModSettingSaveDir();
+        std::filesystem::create_directories(saveDir);
+        auto savePath = saveDir / (std::to_string(levelID) + ".json");
+
+        matjson::Value jsonOutput = matjson::Object();
+        matjson::Value jsonFrames = matjson::Array();
+
+        for (const auto& frame : fields->m_recordedFrames) {
+            matjson::Value f = matjson::Object();
+            f["x"] = frame.x;
+            f["y"] = frame.y;
+            f["rotation"] = frame.rotation;
+            jsonFrames.push_back(f);
+        }
+
+        jsonOutput["frames"] = jsonFrames;
+
+        std::ofstream file(savePath);
+        if (file.is_open()) {
+            file << jsonOutput.dump();
+            file.close();
+        }
+    }
 };
+
 // Continuing the MyPlayLayer implementation...
 class $modify(MyPlayLayerEngine, PlayLayer) {
     // 3. Keep track of vector size when a checkpoint is placed
     void createCheckpoint() {
         PlayLayer::createCheckpoint();
-        auto customFields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
-        customFields->m_checkpointFrameCounts.push_back(customFields->m_recordedFrames.size());
+        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
+        fields->m_checkpointFrameCounts.push_back(fields->m_recordedFrames.size());
     }
 
     // 4. Handle manual deletion of checkpoints
     void removeLastCheckpoint() {
         PlayLayer::removeLastCheckpoint();
-        auto customFields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
-        if (!customFields->m_checkpointFrameCounts.empty()) {
-            customFields->m_checkpointFrameCounts.pop_back();
+        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
+        if (!fields->m_checkpointFrameCounts.empty()) {
+            fields->m_checkpointFrameCounts.pop_back();
         }
     }
 
-    // 5. STITCHING: Rewind recorded frames to the last valid checkpoint on death
+    // 5. Rewind recorded frames to the last valid checkpoint on death
     void loadFromCheckpoint() {
         PlayLayer::loadFromCheckpoint();
-        auto customFields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
-        
-        // Reset playback frame index back to 0 (or match it to checkpoint if tracking perfectly)
-        customFields->m_currentFrameIndex = 0; 
-        if (customFields->m_ghostSprite) customFields->m_ghostSprite->setVisible(true);
+        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
 
-        if (!customFields->m_checkpointFrameCounts.empty()) {
-            size_t framesAtCheckpoint = customFields->m_checkpointFrameCounts.back();
-            if (framesAtCheckpoint < customFields->m_recordedFrames.size()) {
-                customFields->m_recordedFrames.erase(
-                    customFields->m_recordedFrames.begin() + framesAtCheckpoint, 
-                    customFields->m_recordedFrames.end()
+        fields->m_currentFrameIndex = 0;
+        if (fields->m_ghostSprite) {
+            fields->m_ghostSprite->setVisible(true);
+        }
+
+        if (!fields->m_checkpointFrameCounts.empty()) {
+            size_t framesAtCheckpoint = fields->m_checkpointFrameCounts.back();
+            if (framesAtCheckpoint < fields->m_recordedFrames.size()) {
+                fields->m_recordedFrames.erase(
+                    fields->m_recordedFrames.begin() + framesAtCheckpoint,
+                    fields->m_recordedFrames.end()
                 );
             }
         } else {
-            customFields->m_recordedFrames.clear();
+            fields->m_recordedFrames.clear();
         }
     }
 
-    // 6. Save when level is complete
+    // 6. Save once when level is complete
     void levelComplete() {
         PlayLayer::levelComplete();
-        auto customFields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
-        
-        if (!customFields->m_recordedFrames.empty()) {
-            int levelID = this->m_level->m_levelID;
-            auto savePath = Mod::get()->getModSettingSaveDir() / (std::to_string(levelID) + ".json");
-            
-            matjson::Value jsonOutput = matjson::Object();
-            matjson::Value jsonFrames = matjson::Array();
-            
-            for (const auto& frame : customFields->m_recordedFrames) {
-                matjson::Value f = matjson::Object();
-                f["x"] = frame.x;
-                f["y"] = frame.y;
-                f["rotation"] = frame.rotation;
-                jsonFrames.push_back(f);
-            }
-            
-            jsonOutput["frames"] = jsonFrames;
-            
-            std::ofstream file(savePath);
-            if (file.is_open()) {
-                file << jsonOutput.dump();
-                file.close();
-            }
-        }
+        reinterpret_cast<MyPlayLayer*>(this)->saveGhostToDisk();
     }
 };
+
 // Custom Geode Popup to view and manage recorded ghost files
 class GhostManagerPopup : public FLAlertLayer, public FLAlertLayerProtocol {
 public:
@@ -194,8 +229,7 @@ public:
         if (!FLAlertLayer::init()) return false;
 
         auto winSize = CCDirector::sharedDirector()->getWinSize();
-        
-        // Background touch blocker
+
         this->setTouchEnabled(true);
         this->setKeypadEnabled(true);
 
@@ -209,7 +243,6 @@ public:
         titleLabel->setScale(0.6f);
         this->addChild(titleLabel);
 
-        // Close Button
         auto closeSprite = CCSprite::createWithSpriteFrameName("GJ_closeBtn_001.png");
         auto closeBtn = CCMenuItemSpriteExtra::create(closeSprite, this, menu_selector(GhostManagerPopup::onClose));
         auto menu = CCMenu::create(closeBtn, nullptr);
@@ -229,26 +262,25 @@ public:
         itemMenu->setPosition({0, 0});
 
         auto dir = Mod::get()->getModSettingSaveDir();
+        std::filesystem::create_directories(dir);
+
         float yOffset = winSize.height / 2 + h / 2 - 50;
 
         for (const auto& entry : std::filesystem::directory_iterator(dir)) {
             if (entry.path().extension() == ".json") {
                 std::string filename = entry.path().stem().string();
 
-                // Name label
                 auto nameLbl = CCLabelBMFont::create(filename.c_str(), "goldFont.fnt");
                 nameLbl->setPosition({winSize.width / 2, yOffset});
                 nameLbl->setScale(0.5f);
                 this->addChild(nameLbl);
 
-                // LEFT: Delete Button
                 auto delSprite = CCSprite::createWithSpriteFrameName("edit_delBtnSmall_001.png");
                 auto delBtn = CCMenuItemSpriteExtra::create(delSprite, this, menu_selector(GhostManagerPopup::onDeleteGhost));
                 delBtn->setPosition({winSize.width / 2 - w / 2 + 30, yOffset});
-                delBtn->setID(filename); // Pass level ID via Node ID
+                delBtn->setID(filename);
                 itemMenu->addChild(delBtn);
 
-                // RIGHT: Color cycle button 
                 auto colorSprite = CCSprite::createWithSpriteFrameName("GJ_colorBtn_001.png");
                 colorSprite->setScale(0.6f);
                 auto colorBtn = CCMenuItemSpriteExtra::create(colorSprite, this, menu_selector(GhostManagerPopup::onCycleColor));
@@ -259,6 +291,7 @@ public:
                 yOffset -= 35;
             }
         }
+
         this->addChild(itemMenu);
     }
 
@@ -267,29 +300,26 @@ public:
         std::string levelID = btn->getID();
         auto path = Mod::get()->getModSettingSaveDir() / (levelID + ".json");
         std::filesystem::remove(path);
-        
-        // Refresh display
         this->setupList(240, 200);
     }
 
     void onCycleColor(CCObject* sender) {
         auto btn = static_cast<CCMenuItemSpriteExtra*>(sender);
         std::string levelID = btn->getID();
-        
-        // Cycles color states between Cyan -> Red -> Green -> Yellow
+
         int curColor = Mod::get()->getSavedValue<int>("color_state_" + levelID, 0);
         curColor = (curColor + 1) % 4;
         Mod::get()->setSavedValue<int>("color_state_" + levelID, curColor);
 
         int r = 0, g = 255, b = 255;
-        if (curColor == 1) { r = 255; g = 0; b = 0; }       // Red
-        else if (curColor == 2) { r = 0; g = 255; b = 0; }  // Green
-        else if (curColor == 3) { r = 255; g = 255; b = 0; }// Yellow
+        if (curColor == 1) { r = 255; g = 0; b = 0; }
+        else if (curColor == 2) { r = 0; g = 255; b = 0; }
+        else if (curColor == 3) { r = 255; g = 255; b = 0; }
 
         Mod::get()->setSavedValue<int>("color_r_" + levelID, r);
         Mod::get()->setSavedValue<int>("color_g_" + levelID, g);
         Mod::get()->setSavedValue<int>("color_b_" + levelID, b);
-        
+
         FLAlertLayer::create("Success", "Ghost color updated for next attempt!", "OK")->show();
     }
 
@@ -302,12 +332,12 @@ public:
 class $modify(MyPauseLayer, PauseLayer) {
     void customSetup() {
         PauseLayer::customSetup();
-        
+
         auto menu = this->getChildByID("left-button-menu");
         if (!menu) menu = this->getChildByID("center-button-menu");
 
         if (menu) {
-            auto ghostSprite = CCSprite::createWithSpriteFrameName("GJ_profileButton_001.png"); // Placeholder icon
+            auto ghostSprite = CCSprite::createWithSpriteFrameName("GJ_profileButton_001.png");
             auto ghostBtn = CCMenuItemSpriteExtra::create(ghostSprite, this, menu_selector(MyPauseLayer::onOpenGhostManager));
             menu->addChild(ghostBtn);
             menu->updateLayout();
