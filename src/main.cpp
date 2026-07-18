@@ -15,7 +15,9 @@ struct GhostFrame {
     float rotation;
 };
 
-// Custom fields to keep track of per-level data cleanly
+// Merged modify class: recording, playback, checkpoints, save/load all in one place.
+// (Previously split across two $modify(PlayLayer) classes with a reinterpret_cast hack
+// to share fields between them — that was undefined behavior. Fixed by merging.)
 class $modify(MyPlayLayer, PlayLayer) {
     struct Fields {
         std::vector<GhostFrame> m_recordedFrames;
@@ -32,24 +34,14 @@ class $modify(MyPlayLayer, PlayLayer) {
     bool init(GJGameLevel* level) {
         if (!PlayLayer::init(level)) return false;
 
-        auto fields = m_fields;
-        fields->m_recordedFrames.clear();
-        fields->m_checkpointFrameCounts.clear();
-        fields->m_playbackFrames.clear();
-        fields->m_currentFrameIndex = 0;
-        fields->m_ghostSprite = nullptr;
-        fields->m_hasGhost = false;
-        fields->m_isRecording = false;
-        fields->m_saveRequested = false;
+        auto fields = m_fields.self();
 
-        // Load ghost file if it exists
         int levelID = level ? level->m_levelID : -1;
-        auto saveDir = Mod::get()->getModSettingSaveDir();
+        auto saveDir = Mod::get()->getSaveDir();
         std::filesystem::create_directories(saveDir);
 
         if (levelID >= 0) {
             auto savePath = saveDir / (std::to_string(levelID) + ".json");
-
             if (std::filesystem::exists(savePath)) {
                 std::ifstream file(savePath);
                 if (file.is_open()) {
@@ -80,7 +72,6 @@ class $modify(MyPlayLayer, PlayLayer) {
                 int r = Mod::get()->getSavedValue<int>("color_r_" + std::to_string(levelID), 0);
                 int g = Mod::get()->getSavedValue<int>("color_g_" + std::to_string(levelID), 255);
                 int b = Mod::get()->getSavedValue<int>("color_b_" + std::to_string(levelID), 255);
-
                 fields->m_ghostSprite->setColor({static_cast<GLubyte>(r), static_cast<GLubyte>(g), static_cast<GLubyte>(b)});
                 fields->m_ghostSprite->setOpacity(150);
                 m_objectLayer->addChild(fields->m_ghostSprite);
@@ -93,11 +84,9 @@ class $modify(MyPlayLayer, PlayLayer) {
     // 2. Continuous frame recorder & playback animator
     void update(float dt) {
         PlayLayer::update(dt);
-
-        auto fields = m_fields;
+        auto fields = m_fields.self();
 
         // Recording is enabled while practice mode is active.
-        // If you later add a "Record New Route" button, set fields->m_isRecording = true there.
         fields->m_isRecording = this->m_isPracticeMode;
 
         // Record current frame
@@ -123,58 +112,17 @@ class $modify(MyPlayLayer, PlayLayer) {
         }
     }
 
-    void saveGhostToDisk() {
-        auto fields = m_fields;
-
-        if (!fields->m_isRecording || fields->m_saveRequested || fields->m_recordedFrames.empty()) {
-            return;
-        }
-
-        int levelID = this->m_level ? this->m_level->m_levelID : -1;
-        if (levelID < 0) {
-            return;
-        }
-
-        fields->m_saveRequested = true;
-
-        auto saveDir = Mod::get()->getModSettingSaveDir();
-        std::filesystem::create_directories(saveDir);
-        auto savePath = saveDir / (std::to_string(levelID) + ".json");
-
-        matjson::Value jsonOutput = matjson::Object();
-        matjson::Value jsonFrames = matjson::Array();
-
-        for (const auto& frame : fields->m_recordedFrames) {
-            matjson::Value f = matjson::Object();
-            f["x"] = frame.x;
-            f["y"] = frame.y;
-            f["rotation"] = frame.rotation;
-            jsonFrames.push_back(f);
-        }
-
-        jsonOutput["frames"] = jsonFrames;
-
-        std::ofstream file(savePath);
-        if (file.is_open()) {
-            file << jsonOutput.dump();
-            file.close();
-        }
-    }
-};
-
-// Continuing the MyPlayLayer implementation...
-class $modify(MyPlayLayerEngine, PlayLayer) {
     // 3. Keep track of vector size when a checkpoint is placed
     void createCheckpoint() {
         PlayLayer::createCheckpoint();
-        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
+        auto fields = m_fields.self();
         fields->m_checkpointFrameCounts.push_back(fields->m_recordedFrames.size());
     }
 
     // 4. Handle manual deletion of checkpoints
     void removeLastCheckpoint() {
         PlayLayer::removeLastCheckpoint();
-        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
+        auto fields = m_fields.self();
         if (!fields->m_checkpointFrameCounts.empty()) {
             fields->m_checkpointFrameCounts.pop_back();
         }
@@ -183,7 +131,7 @@ class $modify(MyPlayLayerEngine, PlayLayer) {
     // 5. Rewind recorded frames to the last valid checkpoint on death
     void loadFromCheckpoint() {
         PlayLayer::loadFromCheckpoint();
-        auto fields = reinterpret_cast<MyPlayLayer*>(this)->m_fields.value();
+        auto fields = m_fields.self();
 
         fields->m_currentFrameIndex = 0;
         if (fields->m_ghostSprite) {
@@ -206,7 +154,44 @@ class $modify(MyPlayLayerEngine, PlayLayer) {
     // 6. Save once when level is complete
     void levelComplete() {
         PlayLayer::levelComplete();
-        reinterpret_cast<MyPlayLayer*>(this)->saveGhostToDisk();
+        this->saveGhostToDisk();
+    }
+
+    void saveGhostToDisk() {
+        auto fields = m_fields.self();
+        if (!fields->m_isRecording || fields->m_saveRequested || fields->m_recordedFrames.empty()) {
+            return;
+        }
+
+        int levelID = this->m_level ? this->m_level->m_levelID : -1;
+        if (levelID < 0) {
+            return;
+        }
+
+        fields->m_saveRequested = true;
+
+        auto saveDir = Mod::get()->getSaveDir();
+        std::filesystem::create_directories(saveDir);
+        auto savePath = saveDir / (std::to_string(levelID) + ".json");
+
+        matjson::Value jsonOutput = matjson::Object();
+        matjson::Value jsonFrames = matjson::Array();
+
+        for (const auto& frame : fields->m_recordedFrames) {
+            matjson::Value f = matjson::Object();
+            f["x"] = frame.x;
+            f["y"] = frame.y;
+            f["rotation"] = frame.rotation;
+            jsonFrames.push_back(f);
+        }
+
+        jsonOutput["frames"] = jsonFrames;
+
+        std::ofstream file(savePath);
+        if (file.is_open()) {
+            file << jsonOutput.dump();
+            file.close();
+        }
     }
 };
 
@@ -255,13 +240,21 @@ public:
         return true;
     }
 
+    // Fixed: everything (labels + buttons) is now added to m_listLayer,
+    // and m_listLayer is actually parented to `this`. Previously items were
+    // added straight to `this` while only m_listLayer got cleared on refresh,
+    // so deleting a ghost left old entries stacked on screen.
     void setupList(float w, float h) {
+        if (m_listLayer->getParent() == nullptr) {
+            this->addChild(m_listLayer);
+        }
         m_listLayer->removeAllChildrenWithCleanup(true);
+
         auto winSize = CCDirector::sharedDirector()->getWinSize();
         auto itemMenu = CCMenu::create();
         itemMenu->setPosition({0, 0});
 
-        auto dir = Mod::get()->getModSettingSaveDir();
+        auto dir = Mod::get()->getSaveDir();
         std::filesystem::create_directories(dir);
 
         float yOffset = winSize.height / 2 + h / 2 - 50;
@@ -273,7 +266,7 @@ public:
                 auto nameLbl = CCLabelBMFont::create(filename.c_str(), "goldFont.fnt");
                 nameLbl->setPosition({winSize.width / 2, yOffset});
                 nameLbl->setScale(0.5f);
-                this->addChild(nameLbl);
+                m_listLayer->addChild(nameLbl);
 
                 auto delSprite = CCSprite::createWithSpriteFrameName("edit_delBtnSmall_001.png");
                 auto delBtn = CCMenuItemSpriteExtra::create(delSprite, this, menu_selector(GhostManagerPopup::onDeleteGhost));
@@ -292,13 +285,13 @@ public:
             }
         }
 
-        this->addChild(itemMenu);
+        m_listLayer->addChild(itemMenu);
     }
 
     void onDeleteGhost(CCObject* sender) {
         auto btn = static_cast<CCMenuItemSpriteExtra*>(sender);
         std::string levelID = btn->getID();
-        auto path = Mod::get()->getModSettingSaveDir() / (levelID + ".json");
+        auto path = Mod::get()->getSaveDir() / (levelID + ".json");
         std::filesystem::remove(path);
         this->setupList(240, 200);
     }
